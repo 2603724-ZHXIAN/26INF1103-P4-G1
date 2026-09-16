@@ -1,3 +1,6 @@
+## Repository Link
+**GitHub URL:** https://github.com/2603724-ZHXIAN/26INF1103-P4-G1.git
+
 ## Real-World Problem
 Traditional cybersecurity tools output raw technical telemetry (hash reports, antivirus flags) that non-technical users can't interpret. Hence, when they encounter a suspicious link or file, they often don't know what to do next and miss the chance to learn how and why it was dangerous.
 
