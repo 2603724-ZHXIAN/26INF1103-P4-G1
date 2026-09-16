@@ -1,3 +1,6 @@
+# Project Initial Details T1
+**Done by Team 1:** Xyrus, Ritu, Nandhini, Riddhi, Sam, Zhi Xian
+
 ## Repository Link
 **GitHub URL:** https://github.com/2603724-ZHXIAN/26INF1103-P4-G1.git
 
