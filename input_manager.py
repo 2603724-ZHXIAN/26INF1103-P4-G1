@@ -156,3 +156,16 @@ while True:
         elif sub_choice == "3":
             print(f"{BLUE}[I/O Manager]{RESET} 🛠️  Returning to main menu.")
             # falls through to bottom of loop, redraws menu
+
+    # --- Option 5: Common Threat Summaries (Low/Moderate/High)  ---
+    elif choice == "5":
+        print(f"{BLUE}[I/O Manager]{RESET} 🛠️  Fetching top trending attacks/scams.")
+        # TODO: call data_manager.get_trending_threats() and print results here
+
+    # --- Option 6: Exit ---
+    elif choice == "6":
+        confirm = input("Are you sure you want to exit? (y/n): > ").strip().lower()
+        if confirm == "y":
+            print(f"{BLUE}[I/O Manager]{RESET} 🛠️  Session terminated by user. Goodbye ~")
+            sys.exit(0)
+    print() 
