@@ -14,22 +14,47 @@ HEADERS = {
     "x-apikey": API_KEY
 }
 
+
 def parse_vt_response(json_data):
+    """Parses the raw VT API response into a clean, structured dictionary."""
     attributes = json_data.get("data", {}).get("attributes", {})
     stats = attributes.get("last_analysis_stats", {})
     
+    malicious_count = stats.get("malicious", 0)
+    verdict = "malicious" if malicious_count > 0 else "clean"
+    
+    categories_dict = attributes.get("categories", {})
+    unique_categories = list(set(categories_dict.values()))
+
+    names = attributes.get("names", [])
+    title = names[0] if isinstance(names, list) and names else attributes.get("title", "Unknown")
+
     return {
-        "title": attributes.get("names", [attributes.get("url", "Unknown")])[0] if isinstance(attributes.get("names"), list) else attributes.get("names", "Unknown"),
-        "detection_stats": {
-            "harmless": stats.get("harmless", 0),
-            "malicious": stats.get("malicious", 0),
-            "suspicious": stats.get("suspicious", 0),
-            "undetected": stats.get("undetected", 0),
-            "timeout": stats.get("timeout", 0)
+        "summary": {
+            "title": title,
+            "url": attributes.get("url", "Unknown"),
+            "final_url": attributes.get("last_final_url", "Unknown"),
+            "verdict": verdict,
+            "reputation": attributes.get("reputation", 0),
+            "threat_names": attributes.get("threat_names", []),
+            "tags": attributes.get("tags", []),
+            "categories": unique_categories,
+            "detection_stats": {
+                "harmless": stats.get("harmless", 0),
+                "malicious": malicious_count,
+                "suspicious": stats.get("suspicious", 0),
+                "undetected": stats.get("undetected", 0),
+                "timeout": stats.get("timeout", 0)
+            }
         },
-        "tags": attributes.get("tags", []),
-        "available_attributes": list(attributes.keys()),
-        "raw_data": json_data
+        "metadata": {
+            "tld": attributes.get("tld", "Unknown"),
+            "proxy_country": attributes.get("proxy_country", "Unknown"),
+            "http_response_code": attributes.get("last_http_response_code", "Unknown"),
+            "times_submitted": attributes.get("times_submitted", 0),
+            "first_submission": attributes.get("first_submission_date", "Unknown"),
+            "last_submission": attributes.get("last_submission_date", "Unknown")
+        }
     }
 
 def scan_file_hash(file_hash):
