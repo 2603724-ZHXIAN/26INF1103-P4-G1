@@ -72,3 +72,22 @@ while True:
         print(f"{BLUE}[I/O Manager]{RESET} 🛠️  Captured text input ({len(text)} characters).")
         print(f"{BLUE}[I/O Manager]{RESET} 🛠️  Submission of text is being process, please wait...")
         # TODO: pass `text` to ai_manager / logic_manager here
+
+    # --- Option 2: URL ---
+    elif choice == "2":
+        print("\n🔗 -- Analyze Suspicious URL --")
+        while True:
+            url = input("Enter the suspicious URL or domain: > ").strip()
+            if not url:
+                print(f"  {YELLOW}⚠️  URL cannot be empty.{RESET}")
+                continue
+            if validators.url(url) or validators.domain(url):
+                print(f"  {GREEN}✅ URL '{url}' accepted for analysis.{RESET}")
+                break
+            else:
+                print(f"  {YELLOW}⚠️  That doesn't look like a valid URL/domain "
+                  f"(e.g. example.com or https://example.com/path). Try again.{RESET}")
+                continue
+
+        print(f"{BLUE}[I/O Manager]{RESET} 🛠️  Submission of url website is being analyse...")
+        # TODO: pass `url` to ai_manager / logic_manager here
