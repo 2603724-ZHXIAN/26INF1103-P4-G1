@@ -110,23 +110,40 @@ def main():
     
     if choice == "1":
         user_input = input("Enter local file path OR file hash (MD5/SHA256): ").strip()
+        local_hash = ""
+        
         if os.path.isfile(user_input):
-            print(f"Uploading file '{user_input}' to VirusTotal...")
-            result = upload_and_scan_file(user_input)
+            print(f"Calculating SHA-256 hash for '{user_input}'...")
+            local_hash = get_file_hash(user_input)
+            print(f"Checking VirusTotal for existing report (Hash: {local_hash})...")
+            result = scan_file_hash(local_hash)
         else:
-            print(f"Checking hash '{user_input}'...")
-            result = scan_file_hash(user_input)
+            local_hash = user_input
+            print(f"Checking hash '{local_hash}'...")
+            result = scan_file_hash(local_hash)
+            
+        # Check if we got a 404 (Not Found)
+        if "error" in result and "404" in result.get("error", ""):
+            print("\n[!] File not found on VirusTotal. Skipping new scan as requested.")
+        else:
+            print(f"\n🌐 View report on VirusTotal website: https://www.virustotal.com/gui/file/{local_hash}")
             
     elif choice == "2":
         user_input = input("Enter target URL (e.g., https://example.com): ").strip()
         print(f"Checking URL '{user_input}'...")
         result = scan_url(user_input)
+        
+        if "error" not in result:
+            url_id = base64.urlsafe_b64encode(user_input.encode()).decode().strip("=")
+            print(f"\n🌐 View report on VirusTotal website: https://www.virustotal.com/gui/url/{url_id}")
+            
     else:
         print("Invalid selection.")
         return
 
     print("\n--- Results ---")
-    print(result)
+    print(json.dumps(result, indent=2))
+
 
 if __name__ == "__main__":
     main()
