@@ -40,3 +40,35 @@ while True:
     print(f"  {YELLOW}[5]{RESET} 📈 Top Trending Attacks / Scams")
     print(f"  {YELLOW}[6]{RESET} 🚪 Exit")
     print(DIM + "-" * BANNER_WIDTH + RESET)
+
+    # Menu Options 
+    choice = input("Select an option (1-6): > ").strip()
+    while choice not in {"1", "2", "3", "4", "5", "6"}:
+        print(f"  {RED}❌ Invalid choice. Please enter a number between 1 and 6.{RESET}")
+        choice = input("Select an option (1-6): > ").strip()
+    print(f"{BLUE}[I/O Manager]{RESET} 🛠️  Option [{choice}] has been selected.")
+
+    # --- Option 1: text/email body ---
+    if choice == "1":
+        print("\n📧 -- Analyze Suspicious Text / Scam Email Message --")
+        print("Paste the message below. Type END on a new line when finished.\n")
+        lines = []
+        while True:
+            line = input("> ")
+            if line.strip().upper() == "END":
+                break
+            lines.append(line)
+        text = "\n".join(lines).strip()
+        
+        while not text:
+            print(f"  {YELLOW}⚠️  No text was entered. Type NO to exit, or type your message to continue.{RESET}") 
+            text = input("> ").strip()
+            if text.upper() == "NO":
+                text = ""
+                break
+            else:
+                continue
+     
+        print(f"{BLUE}[I/O Manager]{RESET} 🛠️  Captured text input ({len(text)} characters).")
+        print(f"{BLUE}[I/O Manager]{RESET} 🛠️  Submission of text is being process, please wait...")
+        # TODO: pass `text` to ai_manager / logic_manager here
