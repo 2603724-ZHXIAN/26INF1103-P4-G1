@@ -91,3 +91,37 @@ while True:
 
         print(f"{BLUE}[I/O Manager]{RESET} 🛠️  Submission of url website is being analyse...")
         # TODO: pass `url` to ai_manager / logic_manager here
+
+    # --- Option 3: file path ---
+    elif choice == "3":
+        print("\n📎 -- Analyze File or Image (Path / Screenshot) --")
+        # print(f"Accepted types: {', '.join(VALID_FILE_EXTENSIONS)}\n")
+        while True:
+            path = input("Enter the full file path: > ").strip().strip('"')
+            if not path:
+                print(f"  {YELLOW}⚠️  File path cannot be empty.{RESET}")
+                continue
+
+            # Check if it'a valid file path stored locally
+            if not os.path.isfile(path): 
+                print(f"  {RED}❌ No file found at '{path}'.{RESET}")
+                retry = input("    Try a different path? (y/n): > ").strip().lower()
+                if retry == "y":
+                    continue
+                else:
+                    print(f"{BLUE}[I/O Manager]{RESET} 🛠️  User proceeded with an unverified file path.")
+                    break
+
+            # ext = os.path.splitext(path)[1].lower() # extension of file 
+            filename = os.path.basename(path) # file name 
+            # if ext not in VALID_FILE_EXTENSIONS: # restriction of files
+            #     print(f"  {YELLOW}⚠️  '{ext}' is not an acceptable extension.{RESET}")
+            #     proceed = input("    Analyze anyway? (y/n): > ").strip().lower()
+            #     if proceed != "y":
+            #         continue
+
+            print(f"\n{GREEN}✅ File '{filename}' accepted for analysis.{RESET}\n")
+            break
+
+        print(f"{BLUE}[I/O Manager]{RESET} 🛠️  Submission of file '{filename}' is being handed off for analysis...")
+        # TODO: pass `path` to ai_manager / logic_manager here
