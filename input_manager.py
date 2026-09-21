@@ -125,3 +125,34 @@ while True:
 
         print(f"{BLUE}[I/O Manager]{RESET} 🛠️  Submission of file '{filename}' is being handed off for analysis...")
         # TODO: pass `path` to ai_manager / logic_manager here
+
+    # --- Option 4: Historical database query ---
+    elif choice == "4":
+        print("\n🗄️  -- Query Historical Incident Database --")
+        print("  [1] Search by keyword")
+        print("  [2] Filter by risk level (Low / Moderate / High)")
+        print("  [3] Back to main menu")
+
+        sub_choice = input("Select an option (1-3): > ").strip()
+        while sub_choice not in {"1", "2", "3"}:
+            print(f"  {YELLOW}⚠️  Invalid choice. Please enter a number 1, 2 or 3.{RESET}")
+            sub_choice = input("Select an option (1-3): > ").strip()
+
+        if sub_choice == "1":
+            keyword = input("Enter search keyword: > ").strip()
+            print(f"{BLUE}[I/O Manager]{RESET} 🛠️  Querying records for keyword '{keyword}'.")
+            # TODO: pass keyword to data_manager here
+
+        elif sub_choice == "2":
+            levels = {"1": "Low", "2": "Moderate", "3": "High"}
+            print("  [1] Low  [2] Moderate  [3] High ")
+            lvl_choice = input("Select risk level (1-3): > ").strip()
+            while lvl_choice not in levels:
+                print(f"  {YELLOW}⚠️  Invalid risk level.{RESET}")
+                lvl_choice = input("Select risk level (1-3): > ").strip()
+            print(f"{BLUE}[I/O Manager]{RESET} 🛠️  Querying records at risk level '{levels[lvl_choice]}'.")
+            # TODO: pass levels[lvl_choice] to data_manager here
+
+        elif sub_choice == "3":
+            print(f"{BLUE}[I/O Manager]{RESET} 🛠️  Returning to main menu.")
+            # falls through to bottom of loop, redraws menu
