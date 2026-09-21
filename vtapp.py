@@ -87,22 +87,19 @@ def get_file_hash(file_path):
 
 
 def scan_url(url_input):
-    # Convert URL to VirusTotal base64 URL identifier
     url_id = base64.urlsafe_b64encode(url_input.encode()).decode().strip("=")
     endpoint = f"https://www.virustotal.com/api/v3/urls/{url_id}"
     
     response = requests.get(endpoint, headers=HEADERS)
     
     if response.status_code == 404:
-        submit_url = "https://www.virustotal.com/api/v3/urls"
-        payload = {"url": url_input}
-        submit_response = requests.post(submit_url, headers=HEADERS, data=payload)
-        return submit_response.json()
+        return {"error": "URL not found in VirusTotal database. New scans are disabled to save time."}
         
     if response.status_code == 200:
         return parse_vt_response(response.json())
         
     return {"error": f"Failed with status code {response.status_code}", "details": response.text}
+
 
 def main():
     print("--- VirusTotal v3 Scanner ---")
