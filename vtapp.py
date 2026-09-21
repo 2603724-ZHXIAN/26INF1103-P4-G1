@@ -1,6 +1,8 @@
 import base64
 import os
 import requests
+import json
+import hashlib
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -37,18 +39,27 @@ def scan_file_hash(file_hash):
         return parse_vt_response(response.json())
     return {"error": f"Failed with status code {response.status_code}", "details": response.text}
 
-def upload_and_scan_file(file_path):
-    if not os.path.exists(file_path):
-        return {"error": "File path does not exist."}
+# def upload_and_scan_file(file_path):
+#     if not os.path.exists(file_path):
+#         return {"error": "File path does not exist."}
     
-    url = "https://www.virustotal.com/api/v3/files"
-    with open(file_path, "rb") as file_handle:
-        files = {"file": (os.path.basename(file_path), file_handle)}
-        response = requests.post(url, headers=HEADERS, files=files)
+#     url = "https://www.virustotal.com/api/v3/files"
+#     with open(file_path, "rb") as file_handle:
+#         files = {"file": (os.path.basename(file_path), file_handle)}
+#         response = requests.post(url, headers=HEADERS, files=files)
     
-    if response.status_code == 200:
-        return response.json()
-    return {"error": f"Failed to upload file. Status code {response.status_code}", "details": response.text}
+#     if response.status_code == 200:
+#         return response.json()
+#     return {"error": f"Failed to upload file. Status code {response.status_code}", "details": response.text}
+
+def get_file_hash(file_path):
+    """Calculates the SHA-256 hash of a local file."""
+    sha256_hash = hashlib.sha256()
+    with open(file_path, "rb") as f:
+        for byte_block in iter(lambda: f.read(4096), b""):
+            sha256_hash.update(byte_block)
+    return sha256_hash.hexdigest()
+
 
 def scan_url(url_input):
     # Convert URL to VirusTotal base64 URL identifier
