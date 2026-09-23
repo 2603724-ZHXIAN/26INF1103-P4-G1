@@ -168,6 +168,7 @@ def create_tables(db_path: str = DEFAULT_DB_PATH):
     """
     with _connect(db_path) as conn:
         conn.executescript(schema)
+        
 
 # INSERT: submission
 def insert_submission(db_path, data_origin, input_type, input_value, input_hash,
@@ -193,3 +194,96 @@ def update_submission_status(db_path, submission_id, processing_status):
             "UPDATE submission SET processing_status = ? WHERE submission_id = ?",
             (processing_status, submission_id),
         )
+
+
+
+# INSERT: vt_scan_result
+# ----------------------------------------------------------------------
+def insert_vt_scan_result(db_path, submission_id, scanned_type, scanned_value,
+                           malicious_count, suspicious_count, harmless_count,
+                           undetected_count, sha256=None, file_type=None,
+                           threat_label=None, sandbox_verdict=None,
+                           last_analysis_date=None, raw_vt_response=None):
+    total = malicious_count + suspicious_count + harmless_count + undetected_count
+    detection_ratio = (malicious_count + suspicious_count) / total if total else 0.0
+
+    with _connect(db_path) as conn:
+        cur = conn.execute(
+            """INSERT INTO vt_scan_result
+               (submission_id, scanned_type, scanned_value, sha256, file_type,
+                malicious_count, suspicious_count, harmless_count, undetected_count,
+                detection_ratio, threat_label, sandbox_verdict, last_analysis_date,
+                raw_vt_response, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (submission_id, scanned_type, scanned_value, sha256, file_type,
+             malicious_count, suspicious_count, harmless_count, undetected_count,
+             detection_ratio, threat_label, sandbox_verdict, last_analysis_date,
+             _to_json(raw_vt_response), _now()),
+        )
+        return cur.lastrowid
+
+
+# INSERT: text_analysis
+
+def insert_text_analysis(db_path, submission_id, classification, scam_type,
+                          confidence_level, claimed_entity=None,
+                          requested_action=None, possible_intent=None,
+                          extracted_urls=None, extracted_contacts=None,
+                          model_name=None, raw_gemini_response=None):
+    with _connect(db_path) as conn:
+        cur = conn.execute(
+            """INSERT INTO text_analysis
+               (submission_id, classification, scam_type, confidence_level,
+                claimed_entity, requested_action, possible_intent, extracted_urls,
+                extracted_contacts, model_name, raw_gemini_response, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (submission_id, classification, scam_type, confidence_level,
+             claimed_entity, requested_action, _to_json(possible_intent),
+             _to_json(extracted_urls), _to_json(extracted_contacts),
+             model_name, _to_json(raw_gemini_response), _now()),
+        )
+        return cur.lastrowid
+
+
+
+# INSERT: detection_evidence (used for both VT and Gemini evidence)
+
+def insert_evidence(db_path, submission_id, evidence_source, evidence_type,
+                     evidence_name, evidence_value, severity,
+                     evidence_excerpt=None):
+    with _connect(db_path) as conn:
+        cur = conn.execute(
+            """INSERT INTO detection_evidence
+               (submission_id, evidence_source, evidence_type, evidence_name,
+                evidence_value, evidence_excerpt, severity, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (submission_id, evidence_source, evidence_type, evidence_name,
+             evidence_value, evidence_excerpt, severity, _now()),
+        )
+        return cur.lastrowid
+
+
+
+# INSERT: final_assessment
+
+def insert_final_assessment(db_path, submission_id, is_scam, risk_score,
+                             risk_category, risk_reasons=None,
+                             is_new_scam_type=None, summary=None,
+                             what_it_is=None, why_dangerous=None,
+                             possible_impact=None, preventive_steps=None,
+                             recovery_steps=None, limitations=None,
+                             model_name=None):
+    with _connect(db_path) as conn:
+        cur = conn.execute(
+            """INSERT INTO final_assessment
+               (submission_id, is_scam, risk_score, risk_category, risk_reasons,
+                is_new_scam_type, summary, what_it_is, why_dangerous,
+                possible_impact, preventive_steps, recovery_steps, limitations,
+                model_name, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (submission_id, int(is_scam), risk_score, risk_category,
+             _to_json(risk_reasons), is_new_scam_type, summary, what_it_is,
+             why_dangerous, _to_json(possible_impact), _to_json(preventive_steps),
+             _to_json(recovery_steps), _to_json(limitations), model_name, _now()),
+        )
+        return cur.lastrowid
