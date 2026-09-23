@@ -18,7 +18,7 @@ import json
 from datetime import datetime, timezone
 from contextlib import contextmanager
 
-DEAULT_DB_PATH = "scam_analysis.db"
+DEFAULT_DB_PATH = "scam_analysis.db"
 
 def _now() -> str:
     """Return current UTC timestamp as ISO-8601 string."""
@@ -287,3 +287,78 @@ def insert_final_assessment(db_path, submission_id, is_scam, risk_score,
              _to_json(recovery_steps), _to_json(limitations), model_name, _now()),
         )
         return cur.lastrowid
+
+
+# READ helpers
+# ----------------------------------------------------------------------
+def get_submission(db_path, submission_id):
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT * FROM submission WHERE submission_id = ?", (submission_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def get_vt_scan_results(db_path, submission_id):
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT * FROM vt_scan_result WHERE submission_id = ?", (submission_id,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_text_analysis(db_path, submission_id):
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT * FROM text_analysis WHERE submission_id = ?", (submission_id,)
+        ).fetchone()
+        if not row:
+            return None
+        record = dict(row)
+        for field in ("possible_intent", "extracted_urls", "extracted_contacts"):
+            record[field] = _from_json(record[field])
+        return record
+
+
+def get_evidence(db_path, submission_id):
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT * FROM detection_evidence WHERE submission_id = ? ORDER BY severity",
+            (submission_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_final_assessment(db_path, submission_id):
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT * FROM final_assessment WHERE submission_id = ?", (submission_id,)
+        ).fetchone()
+        if not row:
+            return None
+        record = dict(row)
+        for field in ("risk_reasons", "possible_impact", "preventive_steps",
+                      "recovery_steps", "limitations"):
+            record[field] = _from_json(record[field])
+        return record
+
+
+def get_full_submission(db_path, submission_id):
+    """Pull everything related to one submission into a single dict — handy
+    for building the filtered JSON payload sent to Gemini, or for a report."""
+    return {
+        "submission": get_submission(db_path, submission_id),
+        "vt_scan_results": get_vt_scan_results(db_path, submission_id),
+        "text_analysis": get_text_analysis(db_path, submission_id),
+        "evidence": get_evidence(db_path, submission_id),
+        "final_assessment": get_final_assessment(db_path, submission_id),
+    }
+
+
+def find_by_input_hash(db_path, input_hash):
+    """Check for duplicate submissions before re-processing the same input."""
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT * FROM submission WHERE input_hash = ?", (input_hash,)
+        ).fetchone()
+        return dict(row) if row else None
