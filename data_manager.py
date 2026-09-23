@@ -168,3 +168,28 @@ def create_tables(db_path: str = DEFAULT_DB_PATH):
     """
     with _connect(db_path) as conn:
         conn.executescript(schema)
+
+# INSERT: submission
+def insert_submission(db_path, data_origin, input_type, input_value, input_hash,
+                       interaction_type, interaction_description=None,
+                       processing_status="pending",
+                       dataset_batch=None, file_path=None):
+    with _connect(db_path) as conn:
+        cur = conn.execute(
+            """INSERT INTO submission
+            (data_origin, dataset_batch, input_type, input_value, input_hash,
+                file_path, interaction_type, interaction_description,
+                processing_status, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (data_origin, dataset_batch, input_type, input_value, input_hash,
+            file_path, interaction_type, interaction_description,
+            processing_status, _now()),
+        )
+        return cur.lastrowid
+
+def update_submission_status(db_path, submission_id, processing_status):
+    with _connect(db_path) as conn:
+        conn.execute(
+            "UPDATE submission SET processing_status = ? WHERE submission_id = ?",
+            (processing_status, submission_id),
+        )
