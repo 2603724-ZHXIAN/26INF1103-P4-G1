@@ -506,3 +506,86 @@ def format_submission_report(data: dict) -> str:
 
     lines.append("=" * 60)
     return "\n".join(lines)
+
+# manual test/demo code
+if __name__ == "__main__":
+    TEST_DB = "scam_analysis_test.db"
+    create_tables(TEST_DB)
+
+    sub_id = insert_submission(
+        TEST_DB,
+        data_origin="cli",
+        input_type="text",
+        input_value="Your account has been suspended, verify immediately: https://fake-bank-login.example",
+        input_hash="demo-hash-0001",
+        interaction_type="clicked_link",
+        interaction_description="Clicked the link in the message but did not enter any information.",
+        processing_status="processing",
+    )
+
+    insert_text_analysis(
+        TEST_DB,
+        submission_id=sub_id,
+        classification="scam",
+        scam_type="bank_impersonation",
+        confidence_level="high",
+        claimed_entity="DBS Bank",
+        requested_action="Open a link and verify the account",
+        possible_intent=["credential theft", "account takeover"],
+        extracted_urls=["https://fake-bank-login.example"],
+        model_name="gemini-1.5-pro",
+    )
+
+    insert_evidence(
+        TEST_DB,
+        submission_id=sub_id,
+        evidence_source="gemini",
+        evidence_type="urgency",
+        evidence_name="Urgency pressure",
+        evidence_value="Pressures the recipient to act immediately",
+        evidence_excerpt="verify immediately",
+        severity="high",
+    )
+
+    insert_vt_scan_result(
+        TEST_DB,
+        submission_id=sub_id,
+        scanned_type="url",
+        scanned_value="https://fake-bank-login.example",
+        malicious_count=8,
+        suspicious_count=3,
+        harmless_count=20,
+        undetected_count=39,
+        threat_label="phishing",
+    )
+
+    insert_evidence(
+        TEST_DB,
+        submission_id=sub_id,
+        evidence_source="virustotal",
+        evidence_type="engine_detection",
+        evidence_name="Multiple engine detections",
+        evidence_value="Multiple engines classified the URL as malicious.",
+        severity="critical",
+    )
+
+    insert_final_assessment(
+        TEST_DB,
+        submission_id=sub_id,
+        is_scam=True,
+        risk_score=92,
+        risk_category="critical",
+        risk_reasons=[
+            "Sensitive credentials were requested",
+            "A financial institution was impersonated",
+            "The included URL received malicious detections",
+        ],
+        is_new_scam_type=0,
+        summary="This message is a bank-impersonation phishing scam.",
+        model_name="gemini-1.5-pro",
+    )
+
+    update_submission_status(TEST_DB, sub_id, "completed")
+
+    data = get_full_submission(TEST_DB, sub_id)
+    print(format_submission_report(data))
