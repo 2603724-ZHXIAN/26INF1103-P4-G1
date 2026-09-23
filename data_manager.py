@@ -433,3 +433,76 @@ def get_risk_category_counts(db_path, data_origin=None):
     with _connect(db_path) as conn:
         rows = conn.execute(query, params).fetchall()
         return [dict(r) for r in rows]
+
+
+# REPORT FORMATTING
+# ----------------------------------------------------------------------
+# This is presentation logic, not database logic — it just takes the raw
+# dict from get_full_submission() and turns it into readable text.
+def format_submission_report(data: dict) -> str:
+    """Take the dict returned by get_full_submission() and turn it into a
+    readable CLI report. Returns a plain-text string."""
+    submission = data.get("submission") or {}
+    assessment = data.get("final_assessment") or {}
+    evidence = data.get("evidence") or []
+
+    lines = []
+    lines.append("=" * 60)
+    lines.append(f"  SUBMISSION #{submission.get('submission_id')}")
+    lines.append("=" * 60)
+
+    if not assessment:
+        lines.append("No final assessment yet — this submission hasn't finished processing.")
+        return "\n".join(lines)
+
+    # 1. Verdict
+    verdict = "SCAM" if assessment.get("is_scam") else "NOT A SCAM"
+    lines.append(f"\nVERDICT: {verdict}")
+    lines.append(f"Risk category: {assessment.get('risk_category', 'unknown').upper()}")
+    lines.append(f"Risk score: {assessment.get('risk_score', '?')}/100")
+
+    # 2. What it is
+    if assessment.get("summary"):
+        lines.append(f"\nSummary: {assessment['summary']}")
+    if assessment.get("what_it_is"):
+        lines.append(f"What it is: {assessment['what_it_is']}")
+
+    # 3. Why it's flagged
+    if assessment.get("why_dangerous"):
+        lines.append(f"\nWhy it's dangerous: {assessment['why_dangerous']}")
+
+    if evidence:
+        lines.append("\nKey evidence:")
+        for item in evidence:
+            lines.append(f"  - [{item.get('severity', '?').upper()}] {item.get('evidence_value', '')}")
+
+    # 4. What to do next
+    interaction_type = submission.get("interaction_type")
+
+    if interaction_type in (
+        "entered_information",
+        "opened_or_downloaded_file",
+        "made_payment_or_shared_banking_details",
+    ):
+        steps_key = "recovery_steps"
+        steps_label = "Recovery steps"
+    else:
+        steps_key = "preventive_steps"
+        steps_label = "Preventive steps"
+
+    steps = assessment.get(steps_key)
+
+    if steps:
+        lines.append(f"\n{steps_label}:")
+        for i, step in enumerate(steps, 1):
+            lines.append(f"  {i}. {step}")
+
+        # 5. Caveats
+    limitations = assessment.get("limitations")
+    if limitations:
+        lines.append("\nLimitations:")
+        for note in limitations:
+            lines.append(f"  - {note}")
+
+    lines.append("=" * 60)
+    return "\n".join(lines)
