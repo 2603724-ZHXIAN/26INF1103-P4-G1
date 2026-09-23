@@ -290,7 +290,6 @@ def insert_final_assessment(db_path, submission_id, is_scam, risk_score,
 
 
 # READ helpers
-# ----------------------------------------------------------------------
 def get_submission(db_path, submission_id):
     with _connect(db_path) as conn:
         row = conn.execute(
@@ -362,3 +361,75 @@ def find_by_input_hash(db_path, input_hash):
             "SELECT * FROM submission WHERE input_hash = ?", (input_hash,)
         ).fetchone()
         return dict(row) if row else None
+
+
+# count matching scam type records
+# get scam type distribution
+# find similar by claimed entity
+# get risk category counts
+
+# ----------------------------------------------------------------------
+def count_matching_scam_type(db_path, scam_type, data_origin="synthetic"):
+    """How many past (default: synthetic baseline) records share this
+    scam_type. A business rule can call this and say: count == 0 means
+    is_new_scam_type = 1."""
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            """SELECT COUNT(*) AS match_count
+               FROM text_analysis ta
+               JOIN submission s ON s.submission_id = ta.submission_id
+               WHERE ta.scam_type = ? AND s.data_origin = ?""",
+            (scam_type, data_origin),
+        ).fetchone()
+        return row["match_count"]
+
+
+def get_scam_type_distribution(db_path, data_origin=None):
+    """Count of records per scam_type, optionally filtered to
+    'synthetic' or 'cli'. Useful for a baseline snapshot or a dashboard."""
+    query = """SELECT ta.scam_type, COUNT(*) AS count
+               FROM text_analysis ta
+               JOIN submission s ON s.submission_id = ta.submission_id"""
+    params = ()
+    if data_origin:
+        query += " WHERE s.data_origin = ?"
+        params = (data_origin,)
+    query += " GROUP BY ta.scam_type ORDER BY count DESC"
+    with _connect(db_path) as conn:
+        rows = conn.execute(query, params).fetchall()
+        return [dict(r) for r in rows]
+
+
+def find_similar_by_claimed_entity(db_path, claimed_entity, exclude_submission_id=None, limit=10):
+    """Past cases (any origin) that impersonated the same entity — e.g.
+    every prior case claiming to be 'DBS Bank'."""
+    query = """SELECT s.submission_id, s.created_at, ta.scam_type,
+                      ta.classification, ta.confidence_level
+               FROM text_analysis ta
+               JOIN submission s ON s.submission_id = ta.submission_id
+               WHERE ta.claimed_entity = ?"""
+    params = [claimed_entity]
+    if exclude_submission_id is not None:
+        query += " AND s.submission_id != ?"
+        params.append(exclude_submission_id)
+    query += " ORDER BY s.created_at DESC LIMIT ?"
+    params.append(limit)
+    with _connect(db_path) as conn:
+        rows = conn.execute(query, params).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_risk_category_counts(db_path, data_origin=None):
+    """Count of final assessments per risk_category — e.g. for a summary
+    report of how many critical/high/etc. cases exist."""
+    query = """SELECT fa.risk_category, COUNT(*) AS count
+               FROM final_assessment fa
+               JOIN submission s ON s.submission_id = fa.submission_id"""
+    params = ()
+    if data_origin:
+        query += " WHERE s.data_origin = ?"
+        params = (data_origin,)
+    query += " GROUP BY fa.risk_category ORDER BY count DESC"
+    with _connect(db_path) as conn:
+        rows = conn.execute(query, params).fetchall()
+        return [dict(r) for r in rows]
