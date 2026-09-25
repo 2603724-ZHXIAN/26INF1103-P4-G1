@@ -3,7 +3,7 @@ gemini_manager.py
 
 Sends text to Gemini and returns structured JSON.
 Gemini extracts evidence and generates educational content.
-It does not calculate the final risk level.
+It does not calculate the final risk level. (Logic_manager.py does that)
 """
 
 import json
@@ -23,8 +23,6 @@ LOGGER = logging.getLogger(__name__)
 MAX_API_ATTEMPTS = 5
 
 
-# Configuration is resolved relative to this module rather than the caller's
-# working directory.
 def load_gemini_config():
     """Load the Gemini API configuration from the project .env file."""
     env_path = Path(__file__).resolve().parent / ".env"
@@ -43,7 +41,6 @@ def load_gemini_config():
 
 def build_indicator_schema():
     """Return the JSON schema used by every threat indicator."""
-    # All text indicators reuse this small structure for predictable output.
     return {
         "type": "object",
         "properties": {
@@ -63,8 +60,6 @@ def build_indicator_schema():
 
 def build_education_schema():
     """Return the shared educational-guidance schema."""
-    # Text and VirusTotal workflows promise the same education structure, so
-    # maintaining it once prevents the two schemas from drifting apart.
     return {
         "type": "object",
         "properties": {
@@ -310,7 +305,6 @@ def build_response_schema():
                     "description_summary"
                 ]
             },
-            # Embed the shared education contract inside the larger text result.
             "education": build_education_schema()
         },
         "required": [
@@ -435,8 +429,6 @@ def send_structured_gemini_request(
     operation_name
 ):
     """Send one structured Gemini request with shared error handling."""
-    # This function is the refactoring boundary shared by both workflows.
-    # Callers supply only their prompt, schema and specialised validator.
     try:
         api_key, model_name = load_gemini_config()
     except ValueError as error:
@@ -455,7 +447,6 @@ def send_structured_gemini_request(
         f"v1beta/models/{model_name}:generateContent"
     )
 
-    # Both workflows use identical Gemini structured-output configuration.
     request_body = {
         "contents": [
             {
@@ -476,8 +467,6 @@ def send_structured_gemini_request(
 
     last_error = None
 
-    # Centralising retries ensures text and VT education handle failures in
-    # exactly the same way.
     for attempt_number in range(
         1,
         MAX_API_ATTEMPTS + 1
@@ -692,8 +681,6 @@ def validate_interaction_input(
     interaction_description=None
 ):
     """Validate the interaction shared by Gemini workflows."""
-    # One validation function prevents the two workflows from accepting
-    # different spellings for the same CLI interaction.
     valid_interactions = {
         "viewed_only",
         "clicked_link",
@@ -757,7 +744,6 @@ def analyse_text_with_gemini(
         interaction_description
     )
 
-    # The public workflow now delegates transport and retries to shared code.
     return send_structured_gemini_request(
         prompt,
         build_response_schema(),
@@ -768,8 +754,6 @@ def analyse_text_with_gemini(
 
 def build_vt_education_schema():
     """Return Gemini's shared education-only response schema."""
-    # Keep this named wrapper to make the VT workflow self-documenting while
-    # still reusing the single education schema.
     return build_education_schema()
 
 
@@ -780,8 +764,6 @@ def build_vt_education_prompt(
     interaction_description
 ):
     """Build a prompt that prevents Gemini from changing the VT verdict."""
-    # The Logic Manager assessment is treated as fixed input; Gemini only
-    # translates the technical result into user-friendly guidance.
     payload = {
         "virustotal_result": vt_result,
         "logic_manager_assessment": logic_result,
@@ -800,6 +782,14 @@ def build_vt_education_prompt(
         "Use the VirusTotal JSON only to explain the evidence in simple "
         "language and provide preventive and recovery guidance.\n"
         "Recovery steps must reflect what the user did.\n"
+        "When the Logic Manager technical risk is low, clearly explain "
+        "that VirusTotal returned no strong malicious detection. Do not "
+        "describe the resource as a threat and do not recommend urgent "
+        "remediation, password changes, cache clearing, malware scans or "
+        "account recovery unless the supplied evidence supports them. "
+        "Provide proportionate routine-safety guidance instead.\n"
+        "When the technical risk is medium or high, tailor recovery steps "
+        "to both the technical evidence and the user's reported action.\n"
         "Do not invent malware names, engine detections or actions that are "
         "not supported by the supplied data.\n"
         "Return only JSON matching the supplied schema.\n\n"
@@ -871,7 +861,6 @@ def analyse_vt_for_education(
         interaction_description
     )
 
-    # Reuse the same request mechanism with a VT-specific prompt and validator.
     return send_structured_gemini_request(
         prompt,
         build_vt_education_schema(),
