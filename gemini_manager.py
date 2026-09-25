@@ -23,10 +23,12 @@ LOGGER = logging.getLogger(__name__)
 MAX_API_ATTEMPTS = 5
 
 
+# Configuration is resolved relative to this module rather than the caller's
+# working directory.
 def load_gemini_config():
     """Load the Gemini API configuration from the project .env file."""
     env_path = Path(__file__).resolve().parent / ".env"
-    load_dotenv(dotenv_path=env_path,override=True)
+    load_dotenv(dotenv_path=env_path, override=True)
 
     api_key = os.getenv("GEMINI_API_KEY")
     model_name = os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
@@ -41,6 +43,7 @@ def load_gemini_config():
 
 def build_indicator_schema():
     """Return the JSON schema used by every threat indicator."""
+    # All text indicators reuse this small structure for predictable output.
     return {
         "type": "object",
         "properties": {
@@ -54,6 +57,85 @@ def build_indicator_schema():
         "required": [
             "present",
             "evidence"
+        ]
+    }
+
+
+def build_education_schema():
+    """Return the shared educational-guidance schema."""
+    # Text and VirusTotal workflows promise the same education structure, so
+    # maintaining it once prevents the two schemas from drifting apart.
+    return {
+        "type": "object",
+        "properties": {
+            "threat_explanations": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "threat_type": {
+                            "type": "string"
+                        },
+                        "meaning": {
+                            "type": "string"
+                        },
+                        "typical_goal": {
+                            "type": "string"
+                        },
+                        "evidence": {
+                            "type": "array",
+                            "items": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "required": [
+                        "threat_type",
+                        "meaning",
+                        "typical_goal",
+                        "evidence"
+                    ]
+                }
+            },
+            "threat_summary": {
+                "type": "string"
+            },
+            "what_it_is": {
+                "type": "string"
+            },
+            "why_dangerous": {
+                "type": "array",
+                "items": {
+                    "type": "string"
+                }
+            },
+            "preventive_steps": {
+                "type": "array",
+                "items": {
+                    "type": "string"
+                }
+            },
+            "recovery_steps": {
+                "type": "array",
+                "items": {
+                    "type": "string"
+                }
+            },
+            "limitations": {
+                "type": "array",
+                "items": {
+                    "type": "string"
+                }
+            }
+        },
+        "required": [
+            "threat_explanations",
+            "threat_summary",
+            "what_it_is",
+            "why_dangerous",
+            "preventive_steps",
+            "recovery_steps",
+            "limitations"
         ]
     }
 
@@ -228,79 +310,8 @@ def build_response_schema():
                     "description_summary"
                 ]
             },
-            "education": {
-                "type": "object",
-                "properties": {
-                    "threat_explanations": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "threat_type": {
-                                    "type": "string"
-                                },
-                                "meaning": {
-                                    "type": "string"
-                                },
-                                "typical_goal": {
-                                    "type": "string"
-                                },
-                                "evidence": {
-                                    "type": "array",
-                                    "items": {
-                                        "type": "string"
-                                    }
-                                }
-                            },
-                            "required": [
-                                "threat_type",
-                                "meaning",
-                                "typical_goal",
-                                "evidence"
-                            ]
-                        }
-                    },
-                    "threat_summary": {
-                        "type": "string"
-                    },
-                    "what_it_is": {
-                        "type": "string"
-                    },
-                    "why_dangerous": {
-                        "type": "array",
-                        "items": {
-                            "type": "string"
-                        }
-                    },
-                    "preventive_steps": {
-                        "type": "array",
-                        "items": {
-                            "type": "string"
-                        }
-                    },
-                    "recovery_steps": {
-                        "type": "array",
-                        "items": {
-                            "type": "string"
-                        }
-                    },
-                    "limitations": {
-                        "type": "array",
-                        "items": {
-                            "type": "string"
-                        }
-                    }
-                },
-                "required": [
-                    "threat_explanations",
-                    "threat_summary",
-                    "what_it_is",
-                    "why_dangerous",
-                    "preventive_steps",
-                    "recovery_steps",
-                    "limitations"
-                ]
-            }
+            # Embed the shared education contract inside the larger text result.
+            "education": build_education_schema()
         },
         "required": [
             "message_classification",
@@ -416,6 +427,232 @@ def extract_response_text(response_data):
             "Gemini returned an unexpected response structure."
         ) from error
 
+
+def send_structured_gemini_request(
+    prompt,
+    response_schema,
+    response_validator,
+    operation_name
+):
+    """Send one structured Gemini request with shared error handling."""
+    # This function is the refactoring boundary shared by both workflows.
+    # Callers supply only their prompt, schema and specialised validator.
+    try:
+        api_key, model_name = load_gemini_config()
+    except ValueError as error:
+        LOGGER.error(
+            "Gemini configuration error for %s: %s",
+            operation_name,
+            error
+        )
+
+        return {
+            "error": str(error)
+        }
+
+    endpoint = (
+        "https://generativelanguage.googleapis.com/"
+        f"v1beta/models/{model_name}:generateContent"
+    )
+
+    # Both workflows use identical Gemini structured-output configuration.
+    request_body = {
+        "contents": [
+            {
+                "role": "user",
+                "parts": [
+                    {
+                        "text": prompt
+                    }
+                ]
+            }
+        ],
+        "generationConfig": {
+            "temperature": 0.1,
+            "responseMimeType": "application/json",
+            "responseJsonSchema": response_schema
+        }
+    }
+
+    last_error = None
+
+    # Centralising retries ensures text and VT education handle failures in
+    # exactly the same way.
+    for attempt_number in range(
+        1,
+        MAX_API_ATTEMPTS + 1
+    ):
+        try:
+            response = requests.post(
+                endpoint,
+                headers={
+                    "Content-Type": "application/json",
+                    "x-goog-api-key": api_key
+                },
+                json=request_body,
+                timeout=60
+            )
+
+            response.raise_for_status()
+
+            response_data = response.json()
+            response_text = extract_response_text(
+                response_data
+            )
+            parsed_result = json.loads(response_text)
+
+            return response_validator(parsed_result)
+
+        except (
+            json.JSONDecodeError,
+            ValueError
+        ) as error:
+            last_error = str(error)
+
+            LOGGER.warning(
+                "Gemini %s attempt %s returned invalid "
+                "structured output: %s",
+                operation_name,
+                attempt_number,
+                error
+            )
+
+        except requests.exceptions.Timeout:
+            last_error = (
+                f"The Gemini {operation_name} request "
+                "timed out."
+            )
+
+            LOGGER.warning(
+                "Gemini %s attempt %s timed out.",
+                operation_name,
+                attempt_number
+            )
+
+        except requests.exceptions.ConnectionError as error:
+            LOGGER.error(
+                "Could not connect to Gemini for %s: %s",
+                operation_name,
+                error
+            )
+
+            return {
+                "error": (
+                    "Could not connect to Gemini. Check your "
+                    "Internet, DNS, firewall, VPN or proxy."
+                ),
+                "details": str(error)
+            }
+
+        except requests.exceptions.HTTPError as error:
+            error_response = error.response
+            status_code = (
+                error_response.status_code
+                if error_response is not None
+                else "unknown"
+            )
+            response_text = (
+                error_response.text
+                if error_response is not None
+                else str(error)
+            )
+
+            LOGGER.error(
+                "Gemini %s returned HTTP %s on attempt %s: %s",
+                operation_name,
+                status_code,
+                attempt_number,
+                response_text
+            )
+
+            if (
+                status_code in {
+                    429,
+                    500,
+                    502,
+                    503,
+                    504
+                }
+                and attempt_number < MAX_API_ATTEMPTS
+            ):
+                last_error = (
+                    f"Gemini returned HTTP {status_code}."
+                )
+                wait_seconds = min(
+                    2 ** attempt_number,
+                    30
+                )
+
+                print(
+                    f"[Gemini] HTTP {status_code}. "
+                    f"Retrying in {wait_seconds} seconds..."
+                )
+
+                time.sleep(wait_seconds)
+                continue
+
+            return {
+                "error": (
+                    f"Gemini returned HTTP {status_code}."
+                ),
+                "details": response_text
+            }
+
+        except requests.exceptions.RequestException as error:
+            LOGGER.error(
+                "Gemini %s request failed: %s",
+                operation_name,
+                error
+            )
+
+            return {
+                "error": (
+                    f"The Gemini {operation_name} request "
+                    "failed."
+                ),
+                "details": str(error)
+            }
+
+        except RuntimeError as error:
+            LOGGER.error(
+                "Gemini schema error during %s: %s",
+                operation_name,
+                error
+            )
+
+            return {
+                "error": str(error)
+            }
+
+        if attempt_number < MAX_API_ATTEMPTS:
+            wait_seconds = min(
+                2 ** attempt_number,
+                30
+            )
+
+            print(
+                f"[Gemini] Retrying {operation_name} "
+                f"in {wait_seconds} seconds..."
+            )
+
+            time.sleep(wait_seconds)
+
+    LOGGER.error(
+        "Gemini %s failed after %s attempts: %s",
+        operation_name,
+        MAX_API_ATTEMPTS,
+        last_error
+    )
+
+    return {
+        "error": (
+            f"Gemini did not return valid {operation_name} "
+            f"output after {MAX_API_ATTEMPTS} attempts."
+        ),
+        "details": last_error
+    }
+
+
 def validate_analysis_response(analysis):
     """Validate Gemini output against the response schema."""
     if not isinstance(analysis, dict):
@@ -449,22 +686,14 @@ def validate_analysis_response(analysis):
 
     return analysis
 
-def analyse_text_with_gemini(
-    text_input,
+
+def validate_interaction_input(
     interaction_type,
     interaction_description=None
 ):
-    """Send text to Gemini and return validated structured data."""
-    if not isinstance(text_input, str) or not text_input.strip():
-        return {
-            "error": "The submitted text cannot be empty."
-        }
-
-    if not isinstance(interaction_type, str):
-        return {
-            "error": "A valid interaction type is required."
-        }
-
+    """Validate the interaction shared by Gemini workflows."""
+    # One validation function prevents the two workflows from accepting
+    # different spellings for the same CLI interaction.
     valid_interactions = {
         "viewed_only",
         "clicked_link",
@@ -474,43 +703,53 @@ def analyse_text_with_gemini(
         "other"
     }
 
+    if not isinstance(interaction_type, str):
+        return "A valid interaction type is required."
+
     if interaction_type not in valid_interactions:
-        return {
-            "error": (
-                f"Invalid interaction type: {interaction_type}"
-            )
-        }
+        return (
+            f"Invalid interaction type: "
+            f"{interaction_type}"
+        )
 
     if (
         interaction_type == "other"
         and (
-            not isinstance(interaction_description, str)
+            not isinstance(
+                interaction_description,
+                str
+            )
             or not interaction_description.strip()
         )
     ):
-        return {
-            "error": (
-                "An interaction description is required when "
-                "Other is selected."
-            )
-        }
-
-    try:
-        api_key, model_name = load_gemini_config()
-    except ValueError as error:
-        LOGGER.error(
-            "Gemini configuration error: %s",
-            error
+        return (
+            "An interaction description is required "
+            "when Other is selected."
         )
 
+    return None
+
+
+def analyse_text_with_gemini(
+    text_input,
+    interaction_type,
+    interaction_description=None
+):
+    """Analyse submitted text using Gemini structured output."""
+    if not isinstance(text_input, str) or not text_input.strip():
         return {
-            "error": str(error)
+            "error": "The submitted text cannot be empty."
         }
 
-    endpoint = (
-        "https://generativelanguage.googleapis.com/"
-        f"v1beta/models/{model_name}:generateContent"
+    validation_error = validate_interaction_input(
+        interaction_type,
+        interaction_description
     )
+
+    if validation_error:
+        return {
+            "error": validation_error
+        }
 
     prompt = build_analysis_prompt(
         text_input.strip(),
@@ -518,228 +757,20 @@ def analyse_text_with_gemini(
         interaction_description
     )
 
-    request_body = {
-        "contents": [
-            {
-                "role": "user",
-                "parts": [
-                    {
-                        "text": prompt
-                    }
-                ]
-            }
-        ],
-        "generationConfig": {
-            "temperature": 0.1,
-            "responseMimeType": "application/json",
-            "responseJsonSchema": build_response_schema()
-        }
-    }
-
-    last_error = None
-
-    for attempt_number in range(1, MAX_API_ATTEMPTS + 1):
-        try:
-            response = requests.post(
-                endpoint,
-                headers={
-                    "Content-Type": "application/json",
-                    "x-goog-api-key": api_key
-                },
-                json=request_body,
-                timeout=60
-            )
-
-            response.raise_for_status()
-
-            response_data = response.json()
-            response_text = extract_response_text(
-                response_data
-            )
-
-            analysis = json.loads(response_text)
-
-            return validate_analysis_response(analysis)
-
-        except (
-            json.JSONDecodeError,
-            ValueError
-        ) as error:
-            last_error = str(error)
-
-            LOGGER.warning(
-                "Gemini attempt %s returned malformed output: %s",
-                attempt_number,
-                error
-            )
-
-            if attempt_number < MAX_API_ATTEMPTS:
-                continue
-
-        except requests.exceptions.Timeout:
-            last_error = "The Gemini request timed out."
-
-            LOGGER.warning(
-                "Gemini attempt %s timed out.",
-                attempt_number
-            )
-
-            if attempt_number < MAX_API_ATTEMPTS:
-                continue
-
-        except requests.exceptions.ConnectionError as error:
-            LOGGER.error(
-                "Could not connect to Gemini: %s",
-                error
-            )
-
-            return {
-                "error": (
-                    "Could not connect to Gemini. Check your "
-                    "Internet, DNS, firewall, VPN or proxy."
-                ),
-                "details": str(error)
-            }
-
-        except requests.exceptions.HTTPError as error:
-            status_code = error.response.status_code
-            response_text = error.response.text
-
-            LOGGER.error(
-                "Gemini returned HTTP %s on attempt %s: %s",
-                status_code,
-                attempt_number,
-                response_text
-            )
-
-            retryable_status_codes = {
-                429,
-                500,
-                502,
-                503,
-                504
-            }
-
-            if (
-                status_code in retryable_status_codes
-                and attempt_number < MAX_API_ATTEMPTS
-            ):
-                last_error = (
-                    f"Gemini returned HTTP {status_code}."
-                )
-
-                wait_seconds = attempt_number * 40
-
-                LOGGER.warning(
-                    "Retrying Gemini in %s seconds.",
-                    wait_seconds
-                )
-
-                print(
-                    f"[Gemini] HTTP {status_code}. "
-                    f"Retrying in {wait_seconds} seconds..."
-                )
-
-                time.sleep(wait_seconds)
-                continue
-
-            return {
-                "error": (
-                    f"Gemini returned HTTP {status_code}."
-                ),
-                "details": response_text
-            }
-
-        except requests.exceptions.RequestException as error:
-            LOGGER.error(
-                "Gemini request failed: %s",
-                error
-            )
-
-            return {
-                "error": f"Gemini request failed: {error}"
-            }
-
-        except RuntimeError as error:
-            LOGGER.error(
-                "Gemini schema configuration error: %s",
-                error
-            )
-
-            return {
-                "error": str(error)
-            }
-
-    LOGGER.error(
-        "Gemini analysis failed after %s attempts: %s",
-        MAX_API_ATTEMPTS,
-        last_error
+    # The public workflow now delegates transport and retries to shared code.
+    return send_structured_gemini_request(
+        prompt,
+        build_response_schema(),
+        validate_analysis_response,
+        "text analysis"
     )
-
-    return {
-        "error": (
-            "Gemini did not return a valid structured response "
-            f"after {MAX_API_ATTEMPTS} attempts."
-        ),
-        "details": last_error
-    }
 
 
 def build_vt_education_schema():
-    """Return Gemini's VirusTotal education-only response schema."""
-    return {
-        "type": "object",
-        "properties": {
-            "threat_explanations": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "threat_type": {"type": "string"},
-                        "meaning": {"type": "string"},
-                        "typical_goal": {"type": "string"},
-                        "evidence": {
-                            "type": "array",
-                            "items": {"type": "string"}
-                        }
-                    },
-                    "required": [
-                        "threat_type",
-                        "meaning",
-                        "typical_goal",
-                        "evidence"
-                    ]
-                }
-            },
-            "threat_summary": {"type": "string"},
-            "what_it_is": {"type": "string"},
-            "why_dangerous": {
-                "type": "array",
-                "items": {"type": "string"}
-            },
-            "preventive_steps": {
-                "type": "array",
-                "items": {"type": "string"}
-            },
-            "recovery_steps": {
-                "type": "array",
-                "items": {"type": "string"}
-            },
-            "limitations": {
-                "type": "array",
-                "items": {"type": "string"}
-            }
-        },
-        "required": [
-            "threat_explanations",
-            "threat_summary",
-            "what_it_is",
-            "why_dangerous",
-            "preventive_steps",
-            "recovery_steps",
-            "limitations"
-        ]
-    }
+    """Return Gemini's shared education-only response schema."""
+    # Keep this named wrapper to make the VT workflow self-documenting while
+    # still reusing the single education schema.
+    return build_education_schema()
 
 
 def build_vt_education_prompt(
@@ -749,6 +780,8 @@ def build_vt_education_prompt(
     interaction_description
 ):
     """Build a prompt that prevents Gemini from changing the VT verdict."""
+    # The Logic Manager assessment is treated as fixed input; Gemini only
+    # translates the technical result into user-friendly guidance.
     payload = {
         "virustotal_result": vt_result,
         "logic_manager_assessment": logic_result,
@@ -799,108 +832,49 @@ def analyse_vt_for_education(
     interaction_type,
     interaction_description=None
 ):
-    """Generate education only from VT evidence and a fixed risk result."""
-    if not isinstance(vt_result, dict) or "error" in vt_result:
-        return {"error": "A successful VirusTotal result is required."}
+    """Generate education without changing the VirusTotal verdict."""
+    if not isinstance(vt_result, dict):
+        return {
+            "error": (
+                "The VirusTotal result must be a dictionary."
+            )
+        }
+
+    if "error" in vt_result:
+        return {
+            "error": (
+                "A successful VirusTotal result is required."
+            )
+        }
 
     if not isinstance(logic_result, dict):
-        return {"error": "A valid Logic Manager result is required."}
+        return {
+            "error": (
+                "A valid Logic Manager result is required."
+            )
+        }
 
-    if not isinstance(interaction_type, str) or not interaction_type:
-        return {"error": "A valid interaction type is required."}
-
-    try:
-        api_key, model_name = load_gemini_config()
-    except ValueError as error:
-        return {"error": str(error)}
-
-    endpoint = (
-        "https://generativelanguage.googleapis.com/"
-        f"v1beta/models/{model_name}:generateContent"
+    validation_error = validate_interaction_input(
+        interaction_type,
+        interaction_description
     )
+
+    if validation_error:
+        return {
+            "error": validation_error
+        }
+
     prompt = build_vt_education_prompt(
         vt_result,
         logic_result,
         interaction_type,
         interaction_description
     )
-    request_body = {
-        "contents": [
-            {
-                "role": "user",
-                "parts": [{"text": prompt}]
-            }
-        ],
-        "generationConfig": {
-            "temperature": 0.1,
-            "responseMimeType": "application/json",
-            "responseJsonSchema": build_vt_education_schema()
-        }
-    }
-    last_error = None
 
-    for attempt_number in range(1, MAX_API_ATTEMPTS + 1):
-        try:
-            response = requests.post(
-                endpoint,
-                headers={
-                    "Content-Type": "application/json",
-                    "x-goog-api-key": api_key
-                },
-                json=request_body,
-                timeout=60
-            )
-            response.raise_for_status()
-            response_data = response.json()
-            response_text = extract_response_text(response_data)
-            education_result = json.loads(response_text)
-
-            return validate_vt_education_response(education_result)
-        except (json.JSONDecodeError, ValueError) as error:
-            last_error = str(error)
-        except requests.exceptions.Timeout:
-            last_error = "The Gemini education request timed out."
-        except requests.exceptions.ConnectionError as error:
-            return {
-                "error": "Could not connect to Gemini for education.",
-                "details": str(error)
-            }
-        except requests.exceptions.HTTPError as error:
-            status_code = error.response.status_code
-            response_text = error.response.text
-
-            if (
-                status_code in {429, 500, 502, 503, 504}
-                and attempt_number < MAX_API_ATTEMPTS
-            ):
-                last_error = f"Gemini returned HTTP {status_code}."
-                wait_seconds = min(2 ** attempt_number, 30)
-                print(
-                    f"[Gemini] HTTP {status_code}. "
-                    f"Retrying in {wait_seconds} seconds..."
-                )
-                time.sleep(wait_seconds)
-                continue
-
-            return {
-                "error": f"Gemini returned HTTP {status_code}.",
-                "details": response_text
-            }
-        except requests.exceptions.RequestException as error:
-            return {
-                "error": "The Gemini education request failed.",
-                "details": str(error)
-            }
-        except RuntimeError as error:
-            return {"error": str(error)}
-
-        if attempt_number < MAX_API_ATTEMPTS:
-            continue
-
-    return {
-        "error": (
-            "Gemini did not return valid VirusTotal education "
-            f"after {MAX_API_ATTEMPTS} attempts."
-        ),
-        "details": last_error
-    }
+    # Reuse the same request mechanism with a VT-specific prompt and validator.
+    return send_structured_gemini_request(
+        prompt,
+        build_vt_education_schema(),
+        validate_vt_education_response,
+        "VirusTotal education"
+    )
