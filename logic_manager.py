@@ -76,12 +76,12 @@ CRITICAL_EXPOSURE_FIELDS = {
 
 OVERALL_RISK_MATRIX = {
     ("low", "low"): "low",
-    ("low", "medium"): "medium",
-    ("low", "high"): "high",
+    ("low", "medium"): "low",
+    ("low", "high"): "low",
     ("medium", "low"): "medium",
     ("medium", "medium"): "medium",
     ("medium", "high"): "high",
-    ("high", "low"): "medium",
+    ("high", "low"): "high",
     ("high", "medium"): "high",
     ("high", "high"): "high"
 }
@@ -538,6 +538,16 @@ def determine_user_exposure(
 ):
     """Determine exposure from the authoritative user selection."""
     if interaction_type == "other":
+        if user_exposure is None:
+            return {
+                "level": "unknown",
+                "matched_exposures": [],
+                "reason": (
+                    "The custom interaction could not be "
+                    "interpreted reliably."
+                )
+            }
+
         return determine_other_exposure(user_exposure)
 
     level = INTERACTION_LEVELS.get(interaction_type)
@@ -551,7 +561,7 @@ def determine_user_exposure(
 
     descriptions = {
         "viewed_only": (
-            "The user viewed the message without taking another "
+            "The user viewed the item without taking another "
             "reported action."
         ),
         "clicked_link": (
@@ -576,16 +586,12 @@ def determine_user_exposure(
     }
 
 
-def determine_overall_risk(
-    message_level,
-    exposure_level,
-    active_indicators
-):
-    """Combine message risk, evidence and user exposure."""
-    if not active_indicators and message_level == "low":
-        return "low"
-
+def determine_overall_risk(message_level, exposure_level):
+    """Combine technical/message risk and user exposure."""
     if exposure_level == "unknown":
+        if message_level in {"low", "medium", "high"}:
+            return message_level
+
         return "medium"
 
     return OVERALL_RISK_MATRIX.get(
@@ -622,7 +628,8 @@ def determine_route(
     overall_risk,
     interaction_type,
     user_exposure,
-    unknown_warning_signs
+    unknown_warning_signs,
+    source_risk_level
 ):
     """Decide the response route and priority."""
     validated_exposure = validate_user_exposure(
@@ -677,7 +684,12 @@ def determine_route(
         )
     )
 
-    if financial_exposure:
+    exposure_response_required = source_risk_level in {
+        "medium",
+        "high"
+    }
+
+    if financial_exposure and exposure_response_required:
         return {
             "decision": "flag",
             "route": "urgent_financial_response",
@@ -688,7 +700,7 @@ def determine_route(
             )
         }
 
-    if device_exposure:
+    if device_exposure and exposure_response_required:
         return {
             "decision": "flag",
             "route": "device_security_response",
@@ -699,7 +711,7 @@ def determine_route(
             )
         }
 
-    if account_exposure:
+    if account_exposure and exposure_response_required:
         return {
             "decision": "flag",
             "route": "account_security_response",
@@ -818,7 +830,6 @@ def evaluate_text_risk(gemini_result, interaction_type):
     overall_risk = determine_overall_risk(
         message_result["level"],
         exposure_result["level"],
-        active_indicators
     )
 
     if (
@@ -834,7 +845,8 @@ def evaluate_text_risk(gemini_result, interaction_type):
         overall_risk,
         interaction_type,
         user_exposure,
-        message_result["unknown_warning_signs"]
+        message_result["unknown_warning_signs"],
+        message_result["level"]
     )
 
     evidence = get_indicator_evidence(
