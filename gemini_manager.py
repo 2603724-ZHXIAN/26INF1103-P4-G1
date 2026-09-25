@@ -597,7 +597,8 @@ def analyse_text_with_gemini(
                 "error": (
                     "Could not connect to Gemini. Check your "
                     "Internet, DNS, firewall, VPN or proxy."
-                )
+                ),
+                "details": str(error)
             }
 
         except requests.exceptions.HTTPError as error:
@@ -678,6 +679,227 @@ def analyse_text_with_gemini(
     return {
         "error": (
             "Gemini did not return a valid structured response "
+            f"after {MAX_API_ATTEMPTS} attempts."
+        ),
+        "details": last_error
+    }
+
+
+def build_vt_education_schema():
+    """Return Gemini's VirusTotal education-only response schema."""
+    return {
+        "type": "object",
+        "properties": {
+            "threat_explanations": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "threat_type": {"type": "string"},
+                        "meaning": {"type": "string"},
+                        "typical_goal": {"type": "string"},
+                        "evidence": {
+                            "type": "array",
+                            "items": {"type": "string"}
+                        }
+                    },
+                    "required": [
+                        "threat_type",
+                        "meaning",
+                        "typical_goal",
+                        "evidence"
+                    ]
+                }
+            },
+            "threat_summary": {"type": "string"},
+            "what_it_is": {"type": "string"},
+            "why_dangerous": {
+                "type": "array",
+                "items": {"type": "string"}
+            },
+            "preventive_steps": {
+                "type": "array",
+                "items": {"type": "string"}
+            },
+            "recovery_steps": {
+                "type": "array",
+                "items": {"type": "string"}
+            },
+            "limitations": {
+                "type": "array",
+                "items": {"type": "string"}
+            }
+        },
+        "required": [
+            "threat_explanations",
+            "threat_summary",
+            "what_it_is",
+            "why_dangerous",
+            "preventive_steps",
+            "recovery_steps",
+            "limitations"
+        ]
+    }
+
+
+def build_vt_education_prompt(
+    vt_result,
+    logic_result,
+    interaction_type,
+    interaction_description
+):
+    """Build a prompt that prevents Gemini from changing the VT verdict."""
+    payload = {
+        "virustotal_result": vt_result,
+        "logic_manager_assessment": logic_result,
+        "user_interaction": {
+            "interaction_type": interaction_type,
+            "interaction_description": interaction_description or ""
+        }
+    }
+
+    return (
+        "You are an educational cybersecurity assistant.\n"
+        "VirusTotal provides the technical evidence and the Logic Manager "
+        "has already made the risk decision.\n"
+        "Do not change, recalculate or contradict the verdict, risk level, "
+        "engine counts, reputation or detection ratio.\n"
+        "Use the VirusTotal JSON only to explain the evidence in simple "
+        "language and provide preventive and recovery guidance.\n"
+        "Recovery steps must reflect what the user did.\n"
+        "Do not invent malware names, engine detections or actions that are "
+        "not supported by the supplied data.\n"
+        "Return only JSON matching the supplied schema.\n\n"
+        f"INPUT DATA:\n{json.dumps(payload, ensure_ascii=False)}"
+    )
+
+
+def validate_vt_education_response(education_result):
+    """Validate Gemini's VirusTotal education response."""
+    try:
+        validate(
+            instance=education_result,
+            schema=build_vt_education_schema()
+        )
+    except ValidationError as error:
+        raise ValueError(
+            f"Gemini education response failed validation: {error.message}"
+        ) from error
+    except SchemaError as error:
+        raise RuntimeError(
+            f"VirusTotal education schema is invalid: {error.message}"
+        ) from error
+
+    return education_result
+
+
+def analyse_vt_for_education(
+    vt_result,
+    logic_result,
+    interaction_type,
+    interaction_description=None
+):
+    """Generate education only from VT evidence and a fixed risk result."""
+    if not isinstance(vt_result, dict) or "error" in vt_result:
+        return {"error": "A successful VirusTotal result is required."}
+
+    if not isinstance(logic_result, dict):
+        return {"error": "A valid Logic Manager result is required."}
+
+    if not isinstance(interaction_type, str) or not interaction_type:
+        return {"error": "A valid interaction type is required."}
+
+    try:
+        api_key, model_name = load_gemini_config()
+    except ValueError as error:
+        return {"error": str(error)}
+
+    endpoint = (
+        "https://generativelanguage.googleapis.com/"
+        f"v1beta/models/{model_name}:generateContent"
+    )
+    prompt = build_vt_education_prompt(
+        vt_result,
+        logic_result,
+        interaction_type,
+        interaction_description
+    )
+    request_body = {
+        "contents": [
+            {
+                "role": "user",
+                "parts": [{"text": prompt}]
+            }
+        ],
+        "generationConfig": {
+            "temperature": 0.1,
+            "responseMimeType": "application/json",
+            "responseJsonSchema": build_vt_education_schema()
+        }
+    }
+    last_error = None
+
+    for attempt_number in range(1, MAX_API_ATTEMPTS + 1):
+        try:
+            response = requests.post(
+                endpoint,
+                headers={
+                    "Content-Type": "application/json",
+                    "x-goog-api-key": api_key
+                },
+                json=request_body,
+                timeout=60
+            )
+            response.raise_for_status()
+            response_data = response.json()
+            response_text = extract_response_text(response_data)
+            education_result = json.loads(response_text)
+
+            return validate_vt_education_response(education_result)
+        except (json.JSONDecodeError, ValueError) as error:
+            last_error = str(error)
+        except requests.exceptions.Timeout:
+            last_error = "The Gemini education request timed out."
+        except requests.exceptions.ConnectionError as error:
+            return {
+                "error": "Could not connect to Gemini for education.",
+                "details": str(error)
+            }
+        except requests.exceptions.HTTPError as error:
+            status_code = error.response.status_code
+            response_text = error.response.text
+
+            if (
+                status_code in {429, 500, 502, 503, 504}
+                and attempt_number < MAX_API_ATTEMPTS
+            ):
+                last_error = f"Gemini returned HTTP {status_code}."
+                wait_seconds = min(2 ** attempt_number, 30)
+                print(
+                    f"[Gemini] HTTP {status_code}. "
+                    f"Retrying in {wait_seconds} seconds..."
+                )
+                time.sleep(wait_seconds)
+                continue
+
+            return {
+                "error": f"Gemini returned HTTP {status_code}.",
+                "details": response_text
+            }
+        except requests.exceptions.RequestException as error:
+            return {
+                "error": "The Gemini education request failed.",
+                "details": str(error)
+            }
+        except RuntimeError as error:
+            return {"error": str(error)}
+
+        if attempt_number < MAX_API_ATTEMPTS:
+            continue
+
+    return {
+        "error": (
+            "Gemini did not return valid VirusTotal education "
             f"after {MAX_API_ATTEMPTS} attempts."
         ),
         "details": last_error
