@@ -76,12 +76,12 @@ CRITICAL_EXPOSURE_FIELDS = {
 
 OVERALL_RISK_MATRIX = {
     ("low", "low"): "low",
-    ("low", "medium"): "low",
-    ("low", "high"): "low",
+    ("low", "medium"): "medium",
+    ("low", "high"): "high",
     ("medium", "low"): "medium",
     ("medium", "medium"): "medium",
     ("medium", "high"): "high",
-    ("high", "low"): "high",
+    ("high", "low"): "medium",
     ("high", "medium"): "high",
     ("high", "high"): "high"
 }
@@ -538,16 +538,6 @@ def determine_user_exposure(
 ):
     """Determine exposure from the authoritative user selection."""
     if interaction_type == "other":
-        if user_exposure is None:
-            return {
-                "level": "unknown",
-                "matched_exposures": [],
-                "reason": (
-                    "The custom interaction could not be "
-                    "interpreted reliably."
-                )
-            }
-
         return determine_other_exposure(user_exposure)
 
     level = INTERACTION_LEVELS.get(interaction_type)
@@ -561,7 +551,7 @@ def determine_user_exposure(
 
     descriptions = {
         "viewed_only": (
-            "The user viewed the item without taking another "
+            "The user viewed the message without taking another "
             "reported action."
         ),
         "clicked_link": (
@@ -586,12 +576,16 @@ def determine_user_exposure(
     }
 
 
-def determine_overall_risk(message_level, exposure_level):
-    """Combine technical/message risk and user exposure."""
-    if exposure_level == "unknown":
-        if message_level in {"low", "medium", "high"}:
-            return message_level
+def determine_overall_risk(
+    message_level,
+    exposure_level,
+    active_indicators
+):
+    """Combine message risk, evidence and user exposure."""
+    if not active_indicators and message_level == "low":
+        return "low"
 
+    if exposure_level == "unknown":
         return "medium"
 
     return OVERALL_RISK_MATRIX.get(
@@ -628,8 +622,7 @@ def determine_route(
     overall_risk,
     interaction_type,
     user_exposure,
-    unknown_warning_signs,
-    source_risk_level
+    unknown_warning_signs
 ):
     """Decide the response route and priority."""
     validated_exposure = validate_user_exposure(
@@ -684,12 +677,7 @@ def determine_route(
         )
     )
 
-    exposure_response_required = source_risk_level in {
-        "medium",
-        "high"
-    }
-
-    if financial_exposure and exposure_response_required:
+    if financial_exposure:
         return {
             "decision": "flag",
             "route": "urgent_financial_response",
@@ -700,7 +688,7 @@ def determine_route(
             )
         }
 
-    if device_exposure and exposure_response_required:
+    if device_exposure:
         return {
             "decision": "flag",
             "route": "device_security_response",
@@ -711,7 +699,7 @@ def determine_route(
             )
         }
 
-    if account_exposure and exposure_response_required:
+    if account_exposure:
         return {
             "decision": "flag",
             "route": "account_security_response",
@@ -830,6 +818,7 @@ def evaluate_text_risk(gemini_result, interaction_type):
     overall_risk = determine_overall_risk(
         message_result["level"],
         exposure_result["level"],
+        active_indicators
     )
 
     if (
@@ -845,8 +834,7 @@ def evaluate_text_risk(gemini_result, interaction_type):
         overall_risk,
         interaction_type,
         user_exposure,
-        message_result["unknown_warning_signs"],
-        message_result["level"]
+        message_result["unknown_warning_signs"]
     )
 
     evidence = get_indicator_evidence(
@@ -891,4 +879,189 @@ def evaluate_text_risk(gemini_result, interaction_type):
         "matched_exposures": exposure_result[
             "matched_exposures"
         ]
+    }
+
+
+def evaluate_vt_risk(vt_result, interaction_type):
+    """Apply deterministic risk rules to parsed VirusTotal evidence."""
+    if not isinstance(vt_result, dict):
+        raise ValueError(
+            "The parsed VirusTotal result must be a dictionary."
+        )
+
+    stats = vt_result.get("detection_stats")
+
+    if not isinstance(stats, dict):
+        raise ValueError(
+            "VirusTotal detection statistics are missing."
+        )
+
+    try:
+        malicious_count = int(stats.get("malicious", 0) or 0)
+        suspicious_count = int(stats.get("suspicious", 0) or 0)
+        harmless_count = int(stats.get("harmless", 0) or 0)
+        undetected_count = int(stats.get("undetected", 0) or 0)
+        timeout_count = int(stats.get("timeout", 0) or 0)
+        reputation = int(vt_result.get("reputation", 0) or 0)
+    except (TypeError, ValueError) as error:
+        raise ValueError(
+            "VirusTotal returned invalid numeric evidence."
+        ) from error
+
+    if min(
+        malicious_count,
+        suspicious_count,
+        harmless_count,
+        undetected_count,
+        timeout_count
+    ) < 0:
+        raise ValueError(
+            "VirusTotal detection counts cannot be negative."
+        )
+
+    total_count = (
+        malicious_count
+        + suspicious_count
+        + harmless_count
+        + undetected_count
+        + timeout_count
+    )
+
+    if total_count == 0:
+        raise ValueError(
+            "VirusTotal did not return any engine statistics."
+        )
+
+    detection_ratio = (
+        (malicious_count + suspicious_count)
+        / total_count
+        * 100
+    )
+
+    if (
+        malicious_count >= 5
+        or detection_ratio >= 10
+        or reputation <= -20
+    ):
+        technical_risk = "high"
+    elif (
+        malicious_count >= 1
+        or suspicious_count >= 2
+        or detection_ratio >= 3
+        or reputation < 0
+    ):
+        technical_risk = "medium"
+    else:
+        technical_risk = "low"
+
+    exposure_map = {
+        "viewed_only": "low",
+        "clicked_link": "medium",
+        "entered_information": "high",
+        "opened_or_downloaded_file": "high",
+        "made_payment_or_shared_banking_details": "high",
+        "other": "medium"
+    }
+
+    if interaction_type not in exposure_map:
+        raise ValueError(
+            f"Invalid interaction type: {interaction_type}"
+        )
+
+    exposure_level = exposure_map[interaction_type]
+    risk_order = {"low": 1, "medium": 2, "high": 3}
+    reverse_risk_order = {1: "low", 2: "medium", 3: "high"}
+    overall_risk = reverse_risk_order[
+        max(
+            risk_order[technical_risk],
+            risk_order[exposure_level]
+        )
+    ]
+
+    if interaction_type == "made_payment_or_shared_banking_details":
+        route = "urgent_financial_response"
+        priority = "urgent"
+        decision = "flag"
+        recommended_action = (
+            "Contact the bank immediately using an official number."
+        )
+    elif interaction_type == "opened_or_downloaded_file":
+        route = "device_security_response"
+        priority = "high"
+        decision = "flag"
+        recommended_action = (
+            "Disconnect the affected device if necessary and run an "
+            "approved security scan."
+        )
+    elif interaction_type == "entered_information":
+        route = "account_security_response"
+        priority = "high"
+        decision = "flag"
+        recommended_action = (
+            "Change affected credentials through the official service."
+        )
+    elif overall_risk == "high":
+        route = "high_risk_guidance"
+        priority = "high"
+        decision = "flag"
+        recommended_action = (
+            "Do not open or revisit the item and follow the recovery advice."
+        )
+    elif overall_risk == "medium":
+        route = "verification_guidance"
+        priority = "medium"
+        decision = "review"
+        recommended_action = (
+            "Treat the item cautiously and verify it using an official source."
+        )
+    else:
+        route = "general_safety_education"
+        priority = "low"
+        decision = "accept_with_caution"
+        recommended_action = (
+            "No strong malicious evidence was returned, but remain cautious."
+        )
+
+    risk_reasons = [
+        (
+            f"{malicious_count} engine(s) classified the item "
+            "as malicious."
+        ),
+        (
+            f"{suspicious_count} engine(s) classified the item "
+            "as suspicious."
+        ),
+        f"The detection ratio is {detection_ratio:.2f}%.",
+        f"The VirusTotal reputation value is {reputation}."
+    ]
+
+    threat_names = vt_result.get("threat_names", [])
+    categories = vt_result.get("categories", [])
+
+    return {
+        "is_scam": technical_risk == "high",
+        "is_malicious": technical_risk == "high",
+        "risk_score": min(round(detection_ratio), 100),
+        "risk_category": overall_risk,
+        "message_risk": technical_risk,
+        "technical_risk": technical_risk,
+        "exposure_level": exposure_level,
+        "overall_risk": overall_risk,
+        "decision": decision,
+        "route": route,
+        "priority": priority,
+        "recommended_action": recommended_action,
+        "detection_ratio": round(detection_ratio, 2),
+        "risk_reasons": risk_reasons,
+        "flags": sorted(set(threat_names + categories)),
+        "active_indicators": sorted(set(threat_names + categories)),
+        "matched_rules": [
+            {
+                "rule": "virustotal_engine_threshold",
+                "risk_level": technical_risk
+            }
+        ],
+        "matched_exposures": [interaction_type],
+        "unknown_warning_signs": [],
+        "invalid_indicators": []
     }
