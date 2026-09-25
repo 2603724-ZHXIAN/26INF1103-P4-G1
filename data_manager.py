@@ -223,6 +223,7 @@ def create_tables(db_path):
         active_indicators TEXT NOT NULL,
         matched_rules TEXT NOT NULL,
         matched_exposures TEXT NOT NULL,
+        exposure_reason TEXT NOT NULL DEFAULT '',
         unknown_warning_signs TEXT NOT NULL,
         invalid_indicators TEXT NOT NULL,
 
@@ -246,6 +247,19 @@ def create_tables(db_path):
         timeout_count INTEGER NOT NULL DEFAULT 0,
         reputation INTEGER,
         raw_vt_response TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+
+        FOREIGN KEY (submission_id)
+            REFERENCES submission(submission_id)
+            ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS interaction_analysis (
+        interaction_analysis_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        submission_id INTEGER NOT NULL UNIQUE,
+        user_exposure TEXT NOT NULL,
+        model_name TEXT NOT NULL,
+        raw_gemini_response TEXT NOT NULL,
         created_at TEXT NOT NULL,
 
         FOREIGN KEY (submission_id)
@@ -289,6 +303,50 @@ def create_tables(db_path):
 
     with database_connection(db_path) as connection:
         connection.executescript(schema)
+        migrate_database_schema(connection)
+
+
+def get_table_columns(connection, table_name):
+    """Return the column names currently defined for one table."""
+    rows = connection.execute(
+        f"PRAGMA table_info({table_name})"
+    ).fetchall()
+
+    return {
+        row["name"]
+        for row in rows
+    }
+
+
+def add_column_if_missing(
+    connection,
+    table_name,
+    column_name,
+    column_definition
+):
+    """Add one backward-compatible column when it is absent."""
+    existing_columns = get_table_columns(
+        connection,
+        table_name
+    )
+
+    if column_name in existing_columns:
+        return
+
+    connection.execute(
+        f"ALTER TABLE {table_name} "
+        f"ADD COLUMN {column_name} {column_definition}"
+    )
+
+
+def migrate_database_schema(connection):
+    """Apply safe additive migrations to an existing database."""
+    add_column_if_missing(
+        connection,
+        "final_assessment",
+        "exposure_reason",
+        "TEXT NOT NULL DEFAULT ''"
+    )
 
 
 def insert_submission(
@@ -474,11 +532,12 @@ def save_text_analysis_results(
         active_indicators,
         matched_rules,
         matched_exposures,
+        exposure_reason,
         unknown_warning_signs,
         invalid_indicators,
         created_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """
 
     with database_connection(db_path) as connection:
@@ -644,6 +703,7 @@ def save_text_analysis_results(
                 to_json(
                     logic_result.get("matched_exposures", [])
                 ),
+                logic_result.get("exposure_reason", ""),
                 to_json(
                     logic_result.get(
                         "unknown_warning_signs",
@@ -669,21 +729,81 @@ def save_text_analysis_results(
         )
 
 
-def insert_vt_scan_result(
+def build_fallback_vt_education(education_error):
+    """Build stored guidance when Gemini education is unavailable."""
+    return {
+        "threat_explanations": [],
+        "threat_summary": (
+            "VirusTotal completed the technical analysis, but the "
+            "educational explanation was unavailable."
+        ),
+        "what_it_is": (
+            "The technical result remains available in the scan record."
+        ),
+        "why_dangerous": [],
+        "preventive_steps": [
+            "Do not open or revisit an item classified as unsafe."
+        ],
+        "recovery_steps": [
+            "Follow the recommended action from the risk assessment."
+        ],
+        "limitations": [str(education_error)]
+    }
+
+
+def save_vt_analysis_results(
     db_path,
     submission_id,
-    resource_type,
-    resource_identifier,
-    malicious_count,
-    suspicious_count,
-    harmless_count,
-    undetected_count,
-    timeout_count,
-    reputation,
-    raw_vt_response
+    vt_result,
+    logic_result,
+    education_result,
+    interpreted_exposure,
+    model_name
 ):
-    """Insert one VirusTotal result."""
-    query = """
+    """Store VT, deterministic risk and Gemini education atomically."""
+    if not isinstance(vt_result, dict) or "error" in vt_result:
+        raise ValueError("A successful VirusTotal result is required.")
+
+    if not isinstance(logic_result, dict):
+        raise ValueError("A valid Logic Manager result is required.")
+
+    if (
+        interpreted_exposure is not None
+        and not isinstance(interpreted_exposure, dict)
+    ):
+        raise ValueError(
+            "Interpreted exposure must be a dictionary or None."
+        )
+
+    parsed_result = vt_result.get("parsed_result", {})
+    raw_response = vt_result.get("raw_response", {})
+    stats = parsed_result.get("detection_stats", {})
+
+    if not isinstance(parsed_result, dict) or not isinstance(stats, dict):
+        raise ValueError("VirusTotal parsed evidence is incomplete.")
+
+    education_failed = (
+        not isinstance(education_result, dict)
+        or "error" in education_result
+    )
+
+    if education_failed:
+        education_error = (
+            education_result.get("error", "Unknown Gemini error.")
+            if isinstance(education_result, dict)
+            else "Gemini returned an invalid education result."
+        )
+        stored_education = build_fallback_vt_education(
+            education_error
+        )
+        stored_model_name = "education-unavailable"
+    else:
+        stored_education = education_result
+        stored_model_name = model_name
+
+    now = utc_now()
+
+    vt_query = """
     INSERT INTO vt_scan_result (
         submission_id,
         resource_type,
@@ -699,26 +819,196 @@ def insert_vt_scan_result(
     )
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """
+    interaction_query = """
+    INSERT INTO interaction_analysis (
+        submission_id,
+        user_exposure,
+        model_name,
+        raw_gemini_response,
+        created_at
+    )
+    VALUES (?, ?, ?, ?, ?)
+    """
+    guidance_query = """
+    INSERT INTO educational_guidance (
+        submission_id,
+        threat_explanations,
+        threat_summary,
+        what_it_is,
+        why_dangerous,
+        preventive_steps,
+        recovery_steps,
+        limitations,
+        model_name,
+        created_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """
+    evidence_query = """
+    INSERT INTO detection_evidence (
+        submission_id,
+        evidence_source,
+        evidence_type,
+        evidence_name,
+        evidence_value,
+        evidence_excerpt,
+        severity,
+        created_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """
+    assessment_query = """
+    INSERT INTO final_assessment (
+        submission_id,
+        is_scam,
+        risk_score,
+        risk_category,
+        message_risk,
+        exposure_level,
+        overall_risk,
+        decision,
+        route,
+        priority,
+        recommended_action,
+        risk_reasons,
+        flags,
+        active_indicators,
+        matched_rules,
+        matched_exposures,
+        exposure_reason,
+        unknown_warning_signs,
+        invalid_indicators,
+        created_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """
 
     with database_connection(db_path) as connection:
-        cursor = connection.execute(
-            query,
+        connection.execute(
+            vt_query,
             (
                 submission_id,
-                resource_type,
-                resource_identifier,
-                malicious_count,
-                suspicious_count,
-                harmless_count,
-                undetected_count,
-                timeout_count,
-                reputation,
-                to_json(raw_vt_response),
-                utc_now()
+                vt_result.get("resource_type", "unknown"),
+                vt_result.get("resource_identifier", ""),
+                int(stats.get("malicious", 0) or 0),
+                int(stats.get("suspicious", 0) or 0),
+                int(stats.get("harmless", 0) or 0),
+                int(stats.get("undetected", 0) or 0),
+                int(stats.get("timeout", 0) or 0),
+                int(parsed_result.get("reputation", 0) or 0),
+                to_json(raw_response),
+                now
             )
         )
 
-        return cursor.lastrowid
+        if interpreted_exposure is not None:
+            connection.execute(
+                interaction_query,
+                (
+                    submission_id,
+                    to_json(interpreted_exposure),
+                    model_name,
+                    to_json(interpreted_exposure),
+                    now
+                )
+            )
+
+        connection.execute(
+            guidance_query,
+            (
+                submission_id,
+                to_json(stored_education.get("threat_explanations", [])),
+                stored_education.get("threat_summary", ""),
+                stored_education.get("what_it_is", ""),
+                to_json(stored_education.get("why_dangerous", [])),
+                to_json(stored_education.get("preventive_steps", [])),
+                to_json(stored_education.get("recovery_steps", [])),
+                to_json(stored_education.get("limitations", [])),
+                stored_model_name,
+                now
+            )
+        )
+
+        for detection in parsed_result.get("malicious_engines", []):
+            connection.execute(
+                evidence_query,
+                (
+                    submission_id,
+                    "virustotal",
+                    "engine_detection",
+                    detection.get("engine", "unknown_engine"),
+                    detection.get("result", "malicious"),
+                    detection.get("category", "malicious"),
+                    "high",
+                    now
+                )
+            )
+
+        for detection in parsed_result.get("suspicious_engines", []):
+            connection.execute(
+                evidence_query,
+                (
+                    submission_id,
+                    "virustotal",
+                    "engine_detection",
+                    detection.get("engine", "unknown_engine"),
+                    detection.get("result", "suspicious"),
+                    detection.get("category", "suspicious"),
+                    "medium",
+                    now
+                )
+            )
+
+        connection.execute(
+            assessment_query,
+            (
+                submission_id,
+                int(logic_result.get("is_malicious", False)),
+                logic_result.get("risk_score"),
+                logic_result.get("risk_category", "low"),
+                logic_result.get("technical_risk", "low"),
+                logic_result.get("exposure_level", "low"),
+                logic_result.get("overall_risk", "low"),
+                logic_result.get("decision", "review"),
+                logic_result.get("route", "verification_guidance"),
+                logic_result.get("priority", "low"),
+                logic_result.get("recommended_action", "Remain cautious."),
+                to_json(logic_result.get("risk_reasons", [])),
+                to_json(logic_result.get("flags", [])),
+                to_json(logic_result.get("active_indicators", [])),
+                to_json(logic_result.get("matched_rules", [])),
+                to_json(logic_result.get("matched_exposures", [])),
+                logic_result.get("exposure_reason", ""),
+                to_json(logic_result.get("unknown_warning_signs", [])),
+                to_json(logic_result.get("invalid_indicators", [])),
+                now
+            )
+        )
+
+        connection.execute(
+            """
+            UPDATE submission
+            SET processing_status = 'completed',
+                error_message = ?,
+                completed_at = ?
+            WHERE submission_id = ?
+            """,
+            (
+                (
+                    "Gemini education was unavailable; technical "
+                    "VirusTotal results were saved."
+                    if education_failed
+                    else None
+                ),
+                now,
+                submission_id
+            )
+        )
+
+    return {
+        "saved": True,
+        "education_saved": not education_failed
+    }
 
 
 def get_submission_report(db_path, submission_id):
@@ -740,6 +1030,9 @@ def get_submission_report(db_path, submission_id):
         ta.other_warning_signs,
         ta.user_exposure,
         ta.raw_gemini_response,
+        ia.user_exposure AS interpreted_user_exposure,
+        ia.model_name AS interaction_model_name,
+        ia.raw_gemini_response AS raw_interaction_response,
         eg.threat_explanations,
         eg.threat_summary,
         eg.what_it_is,
@@ -761,10 +1054,13 @@ def get_submission_report(db_path, submission_id):
         fa.flags,
         fa.active_indicators,
         fa.matched_rules,
-        fa.matched_exposures
+        fa.matched_exposures,
+        fa.exposure_reason
     FROM submission AS s
     LEFT JOIN text_analysis AS ta
         ON ta.submission_id = s.submission_id
+    LEFT JOIN interaction_analysis AS ia
+        ON ia.submission_id = s.submission_id
     LEFT JOIN educational_guidance AS eg
         ON eg.submission_id = s.submission_id
     LEFT JOIN final_assessment AS fa
@@ -792,6 +1088,8 @@ def get_submission_report(db_path, submission_id):
         "other_warning_signs",
         "user_exposure",
         "raw_gemini_response",
+        "interpreted_user_exposure",
+        "raw_interaction_response",
         "threat_explanations",
         "why_dangerous",
         "preventive_steps",
