@@ -377,3 +377,131 @@ def get_file_upload_endpoint(
         }
 
     return {"upload_endpoint": upload_endpoint}
+
+
+def submit_file_for_analysis(
+    file_path,
+    api_key,
+    timeout_seconds
+):
+    """Upload a local file to VirusTotal and return its analysis ID."""
+    path = Path(file_path).expanduser()
+
+    try:
+        file_size = path.stat().st_size
+    except FileNotFoundError:
+        return {
+            "error": f"The selected file does not exist: {path}",
+            "error_type": "file_error"
+        }
+    except PermissionError as error:
+        return {
+            "error": f"Permission was denied when reading: {path}",
+            "error_type": "file_error",
+            "details": str(error)
+        }
+    except OSError as error:
+        return {
+            "error": f"The file could not be inspected: {path}",
+            "error_type": "file_error",
+            "details": str(error)
+        }
+
+    endpoint_result = get_file_upload_endpoint(
+        file_size,
+        api_key,
+        timeout_seconds
+    )
+
+    if "error" in endpoint_result:
+        return endpoint_result
+
+    try:
+        with path.open("rb") as file_handle:
+            response = requests.post(
+                endpoint_result["upload_endpoint"],
+                headers=build_headers(api_key),
+                files={
+                    "file": (
+                        path.name,
+                        file_handle,
+                        "application/octet-stream"
+                    )
+                },
+                timeout=timeout_seconds
+            )
+    except requests.exceptions.Timeout:
+        return {
+            "error": "VirusTotal did not accept the file before timeout.",
+            "error_type": "timeout"
+        }
+    except requests.exceptions.SSLError as error:
+        return {
+            "error": "A secure connection to VirusTotal could not be made.",
+            "error_type": "ssl_error",
+            "details": str(error)
+        }
+    except requests.exceptions.ConnectionError as error:
+        return {
+            "error": (
+                "Could not connect to VirusTotal. Check the Internet, "
+                "DNS, firewall, VPN or proxy."
+            ),
+            "error_type": "connection_error",
+            "details": str(error)
+        }
+    except requests.exceptions.RequestException as error:
+        return {
+            "error": "The file could not be submitted to VirusTotal.",
+            "error_type": "request_error",
+            "details": str(error)
+        }
+    except (PermissionError, OSError) as error:
+        return {
+            "error": f"The file could not be read: {path}",
+            "error_type": "file_error",
+            "details": str(error)
+        }
+
+    try:
+        response_data = response.json()
+    except requests.exceptions.JSONDecodeError:
+        response_data = None
+
+    if response.status_code not in {200, 201}:
+        error_messages = {
+            400: "VirusTotal rejected the file upload.",
+            401: "The VirusTotal API key is missing or invalid.",
+            403: "The API key cannot upload files to VirusTotal.",
+            413: "The selected file is too large for this endpoint.",
+            429: "The VirusTotal API quota or rate limit was exceeded.",
+            500: "VirusTotal encountered an internal error.",
+            502: "VirusTotal returned a temporary gateway error.",
+            503: "VirusTotal is temporarily unavailable.",
+            504: "VirusTotal did not respond through its gateway in time."
+        }
+        result = {
+            "error": error_messages.get(
+                response.status_code,
+                f"VirusTotal returned HTTP {response.status_code}."
+            ),
+            "error_type": "http_error",
+            "status_code": response.status_code
+        }
+
+        if response_data is not None:
+            result["details"] = response_data
+        elif response.text:
+            result["details"] = response.text[:2000]
+
+        return result
+
+    analysis_id = (response_data or {}).get("data", {}).get("id")
+
+    if not analysis_id:
+        return {
+            "error": "VirusTotal did not return an analysis ID.",
+            "error_type": "invalid_response"
+        }
+
+    return {"analysis_id": analysis_id}
