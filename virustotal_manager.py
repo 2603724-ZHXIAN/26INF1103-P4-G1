@@ -733,3 +733,193 @@ def build_success_result(
         "parsed_result": parsed_result,
         "raw_response": response_data
     }
+
+
+def scan_file(file_input, timeout_seconds=DEFAULT_TIMEOUT_SECONDS):
+    """Retrieve a file report or upload an unknown local file."""
+    try:
+        api_key = load_virustotal_config()
+    except ValueError as error:
+        return {
+            "error": str(error),
+            "error_type": "configuration_error"
+        }
+
+    if not isinstance(file_input, str) or not file_input.strip():
+        return {
+            "error": "A file path or file hash is required.",
+            "error_type": "validation_error"
+        }
+
+    cleaned_input = file_input.strip().strip('"').strip("'")
+    input_path = Path(cleaned_input).expanduser()
+
+    local_file_available = input_path.is_file()
+
+    if local_file_available:
+        try:
+            file_hash = calculate_sha256(input_path)
+        except (
+            FileNotFoundError,
+            PermissionError,
+            OSError,
+            ValueError
+        ) as error:
+            return {
+                "error": str(error),
+                "error_type": "file_error"
+            }
+    elif is_supported_hash(cleaned_input):
+        file_hash = cleaned_input.lower()
+    else:
+        return {
+            "error": (
+                "Enter an existing local file path or a valid MD5, "
+                "SHA-1 or SHA-256 hash."
+            ),
+            "error_type": "validation_error"
+        }
+
+    endpoint = f"{VT_BASE_URL}/files/{file_hash}"
+    request_result = request_vt_report(
+        endpoint,
+        api_key,
+        timeout_seconds
+    )
+
+    if "error" in request_result:
+        if request_result.get("status_code") != 404:
+            return request_result
+
+        if not local_file_available:
+            return {
+                "error": (
+                    "No existing VirusTotal report was found for this "
+                    "hash. Enter the local file path if you want to "
+                    "submit the file for analysis."
+                ),
+                "error_type": "report_not_found",
+                "status_code": 404,
+                "details": request_result.get("details")
+            }
+
+        submission_result = submit_file_for_analysis(
+            input_path,
+            api_key,
+            timeout_seconds
+        )
+
+        if "error" in submission_result:
+            return submission_result
+
+        analysis_result = wait_for_analysis(
+            submission_result["analysis_id"],
+            api_key,
+            timeout_seconds
+        )
+
+        if "error" in analysis_result:
+            return analysis_result
+
+        request_result = request_vt_report(
+            endpoint,
+            api_key,
+            timeout_seconds
+        )
+
+        if "error" in request_result:
+            return request_result
+
+    report_url = (
+        "https://www.virustotal.com/gui/file/"
+        f"{file_hash}"
+    )
+
+    return build_success_result(
+        "file",
+        file_hash,
+        report_url,
+        request_result["response_data"]
+    )
+
+
+def scan_url(url_input, timeout_seconds=DEFAULT_TIMEOUT_SECONDS):
+    """Retrieve an existing URL report or submit an unknown URL."""
+    try:
+        api_key = load_virustotal_config()
+        validated_url = validate_url(url_input)
+        url_identifier = create_url_identifier(validated_url)
+    except ValueError as error:
+        return {
+            "error": str(error),
+            "error_type": "validation_error"
+        }
+
+    endpoint = f"{VT_BASE_URL}/urls/{url_identifier}"
+    request_result = request_vt_report(
+        endpoint,
+        api_key,
+        timeout_seconds
+    )
+
+    if "error" in request_result:
+        if request_result.get("status_code") != 404:
+            return request_result
+
+        submission_result = submit_url_for_analysis(
+            validated_url,
+            api_key,
+            timeout_seconds
+        )
+
+        if "error" in submission_result:
+            return submission_result
+
+        analysis_result = wait_for_analysis(
+            submission_result["analysis_id"],
+            api_key,
+            timeout_seconds
+        )
+
+        if "error" in analysis_result:
+            return analysis_result
+
+        request_result = request_vt_report(
+            endpoint,
+            api_key,
+            timeout_seconds
+        )
+
+        if "error" in request_result:
+            return request_result
+
+    response_data = request_result["response_data"]
+    report_identifier = response_data.get("data", {}).get(
+        "id",
+        url_identifier
+    )
+    report_url = (
+        "https://www.virustotal.com/gui/url/"
+        f"{report_identifier}"
+    )
+
+    return build_success_result(
+        "url",
+        validated_url,
+        report_url,
+        response_data
+    )
+
+
+def scan_resource(input_type, input_value):
+    """Route a file or URL lookup using a common main.py interface."""
+    if input_type == "file":
+        return scan_file(input_value)
+
+    if input_type == "url":
+        return scan_url(input_value)
+
+    return {
+        "error": "VirusTotal supports only file and URL inputs.",
+        "error_type": "validation_error"
+    }
