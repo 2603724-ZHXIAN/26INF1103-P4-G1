@@ -705,3 +705,31 @@ def parse_vt_response(json_data, resource_type):
     }
 
     return parsed_result
+
+
+def build_success_result(
+    resource_type,
+    resource_identifier,
+    report_url,
+    response_data
+):
+    """Build the standard result returned to main.py."""
+    try:
+        parsed_result = parse_vt_response(
+            response_data,
+            resource_type
+        )
+    except (TypeError, ValueError) as error:
+        return {
+            "error": "VirusTotal returned an unsupported report format.",
+            "error_type": "parse_error",
+            "details": str(error)
+        }
+
+    return {
+        "resource_type": resource_type,
+        "resource_identifier": resource_identifier,
+        "report_url": report_url,
+        "parsed_result": parsed_result,
+        "raw_response": response_data
+    }
