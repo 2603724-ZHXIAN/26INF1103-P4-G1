@@ -337,3 +337,43 @@ def wait_for_analysis(
         ),
         "error_type": "analysis_timeout"
     }
+
+def get_file_upload_endpoint(
+    file_size,
+    api_key,
+    timeout_seconds
+):
+    """Return the correct VT upload endpoint for a file size."""
+    if file_size <= DIRECT_FILE_UPLOAD_LIMIT:
+        return {"upload_endpoint": f"{VT_BASE_URL}/files"}
+
+    if file_size > MAX_FILE_UPLOAD_SIZE:
+        return {
+            "error": (
+                "The selected file is larger than VirusTotal's "
+                "650 MB upload limit."
+            ),
+            "error_type": "file_too_large"
+        }
+
+    upload_url_result = request_vt_report(
+        f"{VT_BASE_URL}/files/upload_url",
+        api_key,
+        timeout_seconds
+    )
+
+    if "error" in upload_url_result:
+        return upload_url_result
+
+    upload_endpoint = upload_url_result.get(
+        "response_data",
+        {}
+    ).get("data")
+
+    if not isinstance(upload_endpoint, str) or not upload_endpoint:
+        return {
+            "error": "VirusTotal did not return a valid file upload URL.",
+            "error_type": "invalid_response"
+        }
+
+    return {"upload_endpoint": upload_endpoint}
