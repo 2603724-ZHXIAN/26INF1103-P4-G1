@@ -129,3 +129,80 @@ def create_url_identifier(url_input):
 
     return encoded_url.rstrip("=")
 
+def request_vt_report(endpoint, api_key, timeout_seconds):
+    """Send one VirusTotal GET request and return JSON or an error."""
+    try:
+        response = requests.get(
+            endpoint,
+            headers=build_headers(api_key),
+            timeout=timeout_seconds
+        )
+    except requests.exceptions.Timeout:
+        return {
+            "error": "VirusTotal did not respond before the timeout.",
+            "error_type": "timeout"
+        }
+    except requests.exceptions.SSLError as error:
+        return {
+            "error": "A secure connection to VirusTotal could not be made.",
+            "error_type": "ssl_error",
+            "details": str(error)
+        }
+    except requests.exceptions.ConnectionError as error:
+        return {
+            "error": (
+                "Could not connect to VirusTotal. Check the Internet, "
+                "DNS, firewall, VPN or proxy."
+            ),
+            "error_type": "connection_error",
+            "details": str(error)
+        }
+    except requests.exceptions.RequestException as error:
+        return {
+            "error": "The VirusTotal request failed.",
+            "error_type": "request_error",
+            "details": str(error)
+        }
+
+    try:
+        response_data = response.json()
+    except requests.exceptions.JSONDecodeError:
+        response_data = None
+
+    if response.status_code == 200:
+        if not isinstance(response_data, dict):
+            return {
+                "error": "VirusTotal returned an invalid JSON response.",
+                "error_type": "invalid_response"
+            }
+
+        return {"response_data": response_data}
+
+    error_messages = {
+        400: "VirusTotal rejected the request as invalid.",
+        401: "The VirusTotal API key is missing or invalid.",
+        403: "The VirusTotal project is not permitted to use this endpoint.",
+        404: "No existing VirusTotal report was found.",
+        429: "The VirusTotal API quota or rate limit was exceeded.",
+        500: "VirusTotal encountered an internal error.",
+        502: "VirusTotal returned a temporary gateway error.",
+        503: "VirusTotal is temporarily unavailable.",
+        504: "VirusTotal did not respond through its gateway in time."
+    }
+
+    result = {
+        "error": error_messages.get(
+            response.status_code,
+            f"VirusTotal returned HTTP {response.status_code}."
+        ),
+        "error_type": "http_error",
+        "status_code": response.status_code
+    }
+
+    if response_data is not None:
+        result["details"] = response_data
+    elif response.text:
+        result["details"] = response.text[:2000]
+
+    return result
+
