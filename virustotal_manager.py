@@ -505,3 +505,96 @@ def submit_file_for_analysis(
         }
 
     return {"analysis_id": analysis_id}
+
+
+def normalise_string_list(value):
+    """Return a clean, de-duplicated list of non-empty strings."""
+    if not isinstance(value, list):
+        return []
+
+    cleaned_values = []
+    seen_values = set()
+
+    for item in value:
+        text = str(item).strip()
+
+        if text and text not in seen_values:
+            seen_values.add(text)
+            cleaned_values.append(text)
+
+    return cleaned_values
+
+
+def extract_categories(attributes):
+    """Extract unique category names from a VT categories mapping."""
+    categories = attributes.get("categories", {})
+
+    if not isinstance(categories, dict):
+        return []
+
+    return normalise_string_list(list(categories.values()))
+
+
+def extract_engine_detections(attributes):
+    """Extract engines returning malicious or suspicious verdicts."""
+    analysis_results = attributes.get("last_analysis_results", {})
+    malicious_engines = []
+    suspicious_engines = []
+
+    if not isinstance(analysis_results, dict):
+        return malicious_engines, suspicious_engines
+
+    for engine_name, engine_result in analysis_results.items():
+        if not isinstance(engine_result, dict):
+            continue
+
+        detection = {
+            "engine": engine_result.get(
+                "engine_name",
+                engine_name
+            ),
+            "category": engine_result.get("category", ""),
+            "result": engine_result.get("result", "")
+        }
+
+        if detection["category"] == "malicious":
+            malicious_engines.append(detection)
+        elif detection["category"] == "suspicious":
+            suspicious_engines.append(detection)
+
+    return malicious_engines, suspicious_engines
+
+
+def extract_threat_names(attributes):
+    """Extract suggested and popular threat names when VT provides them."""
+    classification = attributes.get(
+        "popular_threat_classification",
+        {}
+    )
+    threat_names = []
+
+    if isinstance(classification, dict):
+        suggested_label = classification.get(
+            "suggested_threat_label"
+        )
+
+        if suggested_label:
+            threat_names.append(str(suggested_label))
+
+        popular_names = classification.get(
+            "popular_threat_name",
+            []
+        )
+
+        if isinstance(popular_names, list):
+            for item in popular_names:
+                if isinstance(item, dict) and item.get("value"):
+                    threat_names.append(str(item["value"]))
+
+    direct_names = attributes.get("threat_names", [])
+
+    if isinstance(direct_names, list):
+        threat_names.extend(str(item) for item in direct_names)
+
+    return normalise_string_list(threat_names)
+
