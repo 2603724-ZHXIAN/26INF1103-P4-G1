@@ -95,3 +95,37 @@ def calculate_sha256(file_path):
         ) from error
 
     return sha256_hash.hexdigest()
+
+
+def validate_url(url_input):
+    """Validate and return an HTTP or HTTPS URL."""
+    if not isinstance(url_input, str):
+        raise ValueError("The URL must be text.")
+
+    cleaned_url = url_input.strip()
+
+    if not cleaned_url:
+        raise ValueError("The URL cannot be empty.")
+
+    parsed_url = urlparse(cleaned_url)
+
+    if parsed_url.scheme.lower() not in {"http", "https"}:
+        raise ValueError(
+            "The URL must begin with http:// or https://."
+        )
+
+    if not parsed_url.netloc:
+        raise ValueError("The URL must contain a valid host name.")
+
+    return cleaned_url
+
+
+def create_url_identifier(url_input):
+    """Create the unpadded URL-safe Base64 identifier used by VT."""
+    validated_url = validate_url(url_input)
+    encoded_url = base64.urlsafe_b64encode(
+        validated_url.encode("utf-8")
+    ).decode("ascii")
+
+    return encoded_url.rstrip("=")
+
