@@ -285,3 +285,55 @@ def submit_url_for_analysis(url_input, api_key, timeout_seconds):
         }
 
     return {"analysis_id": analysis_id}
+
+def wait_for_analysis(
+    analysis_id,
+    api_key,
+    timeout_seconds,
+    max_attempts=URL_ANALYSIS_MAX_ATTEMPTS,
+    poll_seconds=URL_ANALYSIS_POLL_SECONDS
+):
+    """Poll VirusTotal until a submitted analysis is completed."""
+    endpoint = f"{VT_BASE_URL}/analyses/{analysis_id}"
+
+    for attempt in range(max_attempts):
+        analysis_result = request_vt_report(
+            endpoint,
+            api_key,
+            timeout_seconds
+        )
+
+        if "error" in analysis_result:
+            return analysis_result
+
+        response_data = analysis_result["response_data"]
+        status = (
+            response_data.get("data", {})
+            .get("attributes", {})
+            .get("status", "")
+        )
+
+        if status == "completed":
+            return {"response_data": response_data}
+
+        if status not in {"queued", "in-progress"}:
+            return {
+                "error": (
+                    "VirusTotal returned an unexpected analysis status: "
+                    f"{status or 'unknown'}."
+                ),
+                "error_type": "invalid_response"
+            }
+
+        if attempt < max_attempts - 1:
+            time.sleep(poll_seconds)
+
+    maximum_wait = max_attempts * poll_seconds
+
+    return {
+        "error": (
+            "VirusTotal accepted the resource, but the analysis did not "
+            f"finish within {maximum_wait} seconds. Try again shortly."
+        ),
+        "error_type": "analysis_timeout"
+    }
