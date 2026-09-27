@@ -598,3 +598,110 @@ def extract_threat_names(attributes):
 
     return normalise_string_list(threat_names)
 
+def parse_vt_response(json_data, resource_type):
+    """Convert a raw VT file or URL object into stable application data."""
+    if resource_type not in {"file", "url"}:
+        raise ValueError("resource_type must be 'file' or 'url'.")
+
+    if not isinstance(json_data, dict):
+        raise ValueError("VirusTotal response must be a dictionary.")
+
+    data = json_data.get("data", {})
+    attributes = data.get("attributes", {})
+
+    if not isinstance(data, dict) or not isinstance(attributes, dict):
+        raise ValueError(
+            "VirusTotal response is missing data.attributes."
+        )
+
+    stats = attributes.get("last_analysis_stats", {})
+
+    if not isinstance(stats, dict):
+        stats = {}
+
+    malicious_count = int(stats.get("malicious", 0) or 0)
+    suspicious_count = int(stats.get("suspicious", 0) or 0)
+    harmless_count = int(stats.get("harmless", 0) or 0)
+    undetected_count = int(stats.get("undetected", 0) or 0)
+    timeout_count = int(stats.get("timeout", 0) or 0)
+
+    analysed_count = (
+        malicious_count
+        + suspicious_count
+        + harmless_count
+        + undetected_count
+        + timeout_count
+    )
+
+    detection_ratio = 0.0
+
+    if analysed_count > 0:
+        detection_ratio = (
+            (malicious_count + suspicious_count)
+            / analysed_count
+            * 100
+        )
+
+    malicious_engines, suspicious_engines = (
+        extract_engine_detections(attributes)
+    )
+
+    names = normalise_string_list(attributes.get("names", []))
+    title = attributes.get("title")
+
+    if not title and names:
+        title = names[0]
+
+    if not title:
+        title = attributes.get("meaningful_name", "Unknown")
+
+    parsed_result = {
+        "resource_type": resource_type,
+        "resource_id": data.get("id", ""),
+        "title": title,
+        "url": attributes.get("url", ""),
+        "final_url": attributes.get("last_final_url", ""),
+        "sha256": attributes.get("sha256", ""),
+        "sha1": attributes.get("sha1", ""),
+        "md5": attributes.get("md5", ""),
+        "file_type": attributes.get(
+            "type_description",
+            attributes.get("type_tag", "")
+        ),
+        "file_size": attributes.get("size"),
+        "reputation": int(attributes.get("reputation", 0) or 0),
+        "threat_names": extract_threat_names(attributes),
+        "tags": normalise_string_list(attributes.get("tags", [])),
+        "categories": extract_categories(attributes),
+        "detection_stats": {
+            "malicious": malicious_count,
+            "suspicious": suspicious_count,
+            "harmless": harmless_count,
+            "undetected": undetected_count,
+            "timeout": timeout_count,
+            "total": analysed_count,
+            "detection_ratio": round(detection_ratio, 2)
+        },
+        "malicious_engines": malicious_engines,
+        "suspicious_engines": suspicious_engines,
+        "metadata": {
+            "tld": attributes.get("tld", ""),
+            "last_http_response_code": attributes.get(
+                "last_http_response_code"
+            ),
+            "times_submitted": int(
+                attributes.get("times_submitted", 0) or 0
+            ),
+            "first_submission_date": attributes.get(
+                "first_submission_date"
+            ),
+            "last_submission_date": attributes.get(
+                "last_submission_date"
+            ),
+            "last_analysis_date": attributes.get(
+                "last_analysis_date"
+            )
+        }
+    }
+
+    return parsed_result
