@@ -192,7 +192,26 @@ while True:
 
         elif sub_choice == "3":
             print(f"{BLUE}[I/O Manager]{RESET} 🛠️  Returning to main menu.")
- 
+            
+        if results:
+            for r in results:
+                print(format_result(r))
+            
+            print()
+            view_id = input("Enter an ID to view full details (or press Enter to go back): > ").strip()
+            if view_id.isdigit():
+                report = db.get_submission_report(DB_PATH, int(view_id))
+                if report:
+                    print(f"\n{CYAN}{'='*BANNER_WIDTH}{RESET}")
+                    print(f"{BOLD}FULL INCIDENT REPORT (ID: {view_id}){RESET}")
+                    print(f"{CYAN}{'='*BANNER_WIDTH}{RESET}")
+                    for k, v in report.items():
+                        if v is not None and v != "":
+                            print(f"{BOLD}{str(k).replace('_', ' ').title()}:{RESET} {v}")
+                    print(f"{CYAN}{'='*BANNER_WIDTH}{RESET}")
+                    input("\nPress Enter to return to menu...")
+                else:
+                    print(f"  {YELLOW}⚠️  No report found for ID {view_id}.{RESET}")
 
     # --- Option 5: Common Threat Summaries (Low/Moderate/High)  ---
     elif choice == "5":
