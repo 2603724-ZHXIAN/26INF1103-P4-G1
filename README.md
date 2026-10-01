@@ -6,7 +6,11 @@ Perform
 
 ===============================================================
 
-`.env` file to be filled with own API
+Create `.env` file to be filled with own API Keys
+
+# GEMINI_API_KEY=your_gemini_api_key_here
+# GEMINI_MODEL=gemini-3.8-flash
+# VT_API_KEY=your_virustotal_api_key_here
 
 ===============================================================
 

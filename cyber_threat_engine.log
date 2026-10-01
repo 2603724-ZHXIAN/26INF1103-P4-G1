@@ -1,0 +1,53 @@
+2026-10-01 22:24:11,531 | ERROR | root | Gemini analysis failed for submission 41: Invalid interaction type: manual_entry
+2026-10-01 22:28:47,704 | ERROR | gemini_manager | Gemini text analysis returned HTTP 404 on attempt 1: {
+  "error": {
+    "code": 404,
+    "message": "models/gemini-1.5-flash is not found for API version v1beta, or is not supported for generateContent. Call ModelService.ListModels to see the list of available models and their supported methods.",
+    "status": "NOT_FOUND"
+  }
+}
+
+2026-10-01 22:28:47,713 | ERROR | root | Gemini analysis failed for submission 42: Gemini returned HTTP 404.
+2026-10-01 22:30:42,547 | ERROR | gemini_manager | Gemini text analysis returned HTTP 503 on attempt 1: {
+  "error": {
+    "code": 503,
+    "message": "This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.",
+    "status": "UNAVAILABLE"
+  }
+}
+
+2026-10-01 22:31:44,873 | WARNING | gemini_manager | Gemini text analysis attempt 2 timed out.
+2026-10-01 22:32:48,148 | ERROR | gemini_manager | Gemini text analysis returned HTTP 503 on attempt 3: {
+  "error": {
+    "code": 503,
+    "message": "This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.",
+    "status": "UNAVAILABLE"
+  }
+}
+
+2026-10-01 22:33:56,463 | WARNING | gemini_manager | Gemini text analysis attempt 4 timed out.
+2026-10-01 22:35:12,794 | WARNING | gemini_manager | Gemini text analysis attempt 5 timed out.
+2026-10-01 22:35:12,794 | ERROR | gemini_manager | Gemini text analysis failed after 5 attempts: The Gemini text analysis request timed out.
+2026-10-01 22:35:12,807 | ERROR | root | Gemini analysis failed for submission 43: Gemini did not return valid text analysis output after 5 attempts.
+2026-10-01 22:36:54,142 | ERROR | root | Unexpected exposure-interpretation failure for submission 44
+Traceback (most recent call last):
+  File "c:\Users\chozh\OneDrive\Desktop\26INF1103-P4-G1\main.py", line 682, in analyse_vt_submission
+    gemini.analyse_other_interaction(
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: module 'gemini_manager' has no attribute 'analyse_other_interaction'
+2026-10-01 22:37:09,908 | ERROR | gemini_manager | Gemini VirusTotal education returned HTTP 503 on attempt 1: {
+  "error": {
+    "code": 503,
+    "message": "This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.",
+    "status": "UNAVAILABLE"
+  }
+}
+
+2026-10-01 22:37:16,426 | ERROR | gemini_manager | Gemini VirusTotal education returned HTTP 503 on attempt 2: {
+  "error": {
+    "code": 503,
+    "message": "This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.",
+    "status": "UNAVAILABLE"
+  }
+}
+
