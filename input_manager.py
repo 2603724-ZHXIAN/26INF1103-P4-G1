@@ -131,6 +131,25 @@ while True:
         import data_manager as db
         from config import DB_PATH
         
+        def format_result(r):
+            # Shorten timestamp (e.g. 2026-10-01T09:26:45.923... -> 2026-10-01 09:26)
+            dt = str(r.get("created_at", ""))[:16].replace("T", " ")
+            
+            # Format preview (40 characters)
+            val = str(r.get("input_value", "")).replace("\n", " ").strip()
+            preview = (val[:40] + "...") if len(val) > 40 else val
+            
+            # Color risk
+            risk = str(r.get("risk_category", "Unknown")).lower()
+            if risk == "high":
+                colored_risk = f"{RED}{risk}{RESET}"
+            elif risk in ("moderate", "medium"):
+                colored_risk = f"{YELLOW}{risk}{RESET}"
+            else:
+                colored_risk = f"{GREEN}{risk}{RESET}"
+                
+            return f"  - [{dt}] ID: {r['submission_id']} | Type: {r['input_type']} | Preview: \"{preview}\" | Risk: {colored_risk}"
+
         print("\n🗄️  -- Query Historical Incident Database --")
         print("  [1] Search by keyword")
         print("  [2] Filter by risk level (Low / Moderate / High)")
@@ -141,15 +160,13 @@ while True:
             print(f"  {YELLOW}⚠️  Invalid choice. Please enter a number 1, 2 or 3.{RESET}")
             sub_choice = input("Select an option (1-3): > ").strip()
 
+        results = []
         if sub_choice == "1":
             keyword = input("Enter search keyword: > ").strip()
             print(f"{BLUE}[I/O Manager]{RESET} 🛠️  Querying records for keyword '{keyword}'.")
             results = db.search_records(DB_PATH, keyword)
             if not results:
                 print(f"  {YELLOW}⚠️  No records found for '{keyword}'.{RESET}")
-            else:
-                for r in results:
-                    print(f"  - [{r['created_at']}] ID: {r['submission_id']} | Type: {r['input_type']} | Threat: {r['primary_threat_type']} | Risk: {r['risk_category']}")
 
         elif sub_choice == "2":
             levels = {"1": "Low", "2": "Moderate", "3": "High"}
@@ -163,21 +180,19 @@ while True:
             print(f"{BLUE}[I/O Manager]{RESET} 🛠️  Querying records at risk level '{levels[lvl_choice]}'.")
             
             with db.database_connection(DB_PATH) as conn:
-                results = conn.execute(
-                    "SELECT s.submission_id, s.input_type, s.created_at, fa.risk_category "
+                results = [dict(row) for row in conn.execute(
+                    "SELECT s.submission_id, s.input_type, s.created_at, s.input_value, fa.risk_category "
                     "FROM submission s JOIN final_assessment fa ON s.submission_id = fa.submission_id "
                     "WHERE fa.risk_category = ?",
                     (selected_level,)
-                ).fetchall()
+                ).fetchall()]
             
             if not results:
                 print(f"  {YELLOW}⚠️  No records found for risk '{levels[lvl_choice]}'.{RESET}")
-            else:
-                for r in results:
-                    print(f"  - [{r['created_at']}] ID: {r['submission_id']} | Type: {r['input_type']} | Risk: {r['risk_category']}")
 
         elif sub_choice == "3":
             print(f"{BLUE}[I/O Manager]{RESET} 🛠️  Returning to main menu.")
+ 
 
     # --- Option 5: Common Threat Summaries (Low/Moderate/High)  ---
     elif choice == "5":
