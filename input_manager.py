@@ -128,6 +128,9 @@ while True:
 
     # --- Option 4: Historical database query ---
     elif choice == "4":
+        import data_manager as db
+        from config import DB_PATH
+        
         print("\n🗄️  -- Query Historical Incident Database --")
         print("  [1] Search by keyword")
         print("  [2] Filter by risk level (Low / Moderate / High)")
@@ -141,7 +144,12 @@ while True:
         if sub_choice == "1":
             keyword = input("Enter search keyword: > ").strip()
             print(f"{BLUE}[I/O Manager]{RESET} 🛠️  Querying records for keyword '{keyword}'.")
-            # TODO: pass keyword to data_manager here
+            results = db.search_records(DB_PATH, keyword)
+            if not results:
+                print(f"  {YELLOW}⚠️  No records found for '{keyword}'.{RESET}")
+            else:
+                for r in results:
+                    print(f"  - [{r['created_at']}] ID: {r['submission_id']} | Type: {r['input_type']} | Threat: {r['primary_threat_type']} | Risk: {r['risk_category']}")
 
         elif sub_choice == "2":
             levels = {"1": "Low", "2": "Moderate", "3": "High"}
@@ -150,17 +158,56 @@ while True:
             while lvl_choice not in levels:
                 print(f"  {YELLOW}⚠️  Invalid risk level.{RESET}")
                 lvl_choice = input("Select risk level (1-3): > ").strip()
+            
+            selected_level = levels[lvl_choice].lower()
             print(f"{BLUE}[I/O Manager]{RESET} 🛠️  Querying records at risk level '{levels[lvl_choice]}'.")
-            # TODO: pass levels[lvl_choice] to data_manager here
+            
+            with db.database_connection(DB_PATH) as conn:
+                results = conn.execute(
+                    "SELECT s.submission_id, s.input_type, s.created_at, fa.risk_category "
+                    "FROM submission s JOIN final_assessment fa ON s.submission_id = fa.submission_id "
+                    "WHERE fa.risk_category = ?",
+                    (selected_level,)
+                ).fetchall()
+            
+            if not results:
+                print(f"  {YELLOW}⚠️  No records found for risk '{levels[lvl_choice]}'.{RESET}")
+            else:
+                for r in results:
+                    print(f"  - [{r['created_at']}] ID: {r['submission_id']} | Type: {r['input_type']} | Risk: {r['risk_category']}")
 
         elif sub_choice == "3":
             print(f"{BLUE}[I/O Manager]{RESET} 🛠️  Returning to main menu.")
-            # falls through to bottom of loop, redraws menu
 
     # --- Option 5: Common Threat Summaries (Low/Moderate/High)  ---
     elif choice == "5":
+        import data_manager as db
+        from config import DB_PATH
         print(f"{BLUE}[I/O Manager]{RESET} 🛠️  Fetching top trending attacks/scams.")
-        # TODO: call data_manager.get_trending_threats() and print results here
+        
+        threats = db.get_top_threat_types(DB_PATH)
+        counts = db.get_risk_category_counts(DB_PATH)
+        
+        print(f"\n{BOLD}{CYAN}📈 Top Trending Attacks / Scams{RESET}")
+        print("-" * BANNER_WIDTH)
+        if not threats:
+            print("  No threat data available.")
+        else:
+            for i, t in enumerate(threats, 1):
+                threat_type = t.get('primary_threat_type', 'Unknown')
+                total = t.get('total', 0)
+                print(f"  {YELLOW}{i}.{RESET} {threat_type} ({total} incidents)")
+                
+        print(f"\n{BOLD}{CYAN}📊 Risk Category Breakdown{RESET}")
+        print("-" * BANNER_WIDTH)
+        if not counts:
+            print("  No risk category data available.")
+        else:
+            for c in counts:
+                risk = c.get('risk_category', 'Unknown').capitalize()
+                total = c.get('total', 0)
+                print(f"  - {risk}: {total} incidents")
+        print()
 
     # --- Option 6: Exit ---
     elif choice == "6":

@@ -2,7 +2,7 @@
 
 import logging
 
-import db_manager as db
+import data_manager as db
 import gemini_manager as gemini
 import logic_manager as logic
 from config import DB_PATH
