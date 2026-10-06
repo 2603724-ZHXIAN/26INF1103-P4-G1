@@ -26,6 +26,52 @@ BLUE = "\033[94m" if USE_COLOR else ""
 def generate_hash(value):
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
+def collect_user_interaction():
+    """Ask what the user did before submitting the item for analysis."""
+    interactions = {
+        "1": "viewed_only",
+        "2": "clicked_link",
+        "3": "entered_information",
+        "4": "opened_or_downloaded_file",
+        "5": "made_payment_or_shared_banking_details",
+        "6": "other"
+    }
+
+    print("\nWHAT ACTIONS HAVE YOU ALREADY TAKEN?")
+    print("[1] Only viewed the message or item; took no further action")
+    print("[2] Clicked a link")
+    print("[3] Entered personal information, login details, or an OTP")
+    print("[4] Opened or downloaded a file")
+    print("[5] Made a payment or shared banking details")
+    print("[6] Other, or more than one of these actions")
+
+    while True:
+        choice = input("Select an option (1-6): > ").strip()
+
+        if choice in interactions:
+            break
+
+        print("Invalid choice. Please enter a number between 1 and 6.")
+
+    interaction_type = interactions[choice]
+    interaction_description = None
+
+    if interaction_type == "other":
+        print(
+            "\nDescribe every action you took. "
+            "Do not include passwords, OTPs, or account numbers."
+        )
+
+        while True:
+            interaction_description = input("> ").strip()
+
+            if interaction_description:
+                break
+
+            print("Please describe what happened.")
+
+    return interaction_type, interaction_description
+
 def collect_user_request():
     while True:
         # Banner Display
@@ -69,15 +115,23 @@ def collect_user_request():
                     continue
          
             if text:
-                print(f"{BLUE}[I/O Manager]{RESET} 🛠️  Captured text input ({len(text)} characters).")
-                print(f"{BLUE}[I/O Manager]{RESET} 🛠️  Submission of text is being process, please wait...")
+                interaction_type, interaction_description = (
+                    collect_user_interaction()
+                )
+
+                print(
+                    f"\n[I/O Manager] Captured text input "
+                    f"({len(text)} characters)."
+                )
+                print("[I/O Manager] Submission of text is being processed, please wait...")
+
                 return {
                     "action": "analyze_submission",
                     "input_type": "text",
                     "input_value": text,
                     "input_hash": generate_hash(text),
-                    "interaction_type": "other",
-                    "interaction_description": "User pasted text in CLI"
+                    "interaction_type": interaction_type,
+                    "interaction_description": interaction_description
                 }
 
         # --- Option 2: URL ---
@@ -97,47 +151,84 @@ def collect_user_request():
                     continue
 
             print(f"{BLUE}[I/O Manager]{RESET} 🛠️  Submission of url website is being analyse...")
+            interaction_type, interaction_description = (
+                collect_user_interaction()
+            )
+
+            print(f"{BLUE}[I/O Manager]{RESET} 🛠️  Submission of url website is being analyse...")
+
             return {
                 "action": "analyze_submission",
                 "input_type": "url",
                 "input_value": url,
                 "input_hash": generate_hash(url),
-                "interaction_type": "other",
-                "interaction_description": "User provided a suspicious URL"
+                "interaction_type": interaction_type,
+                "interaction_description": interaction_description
             }
 
         # --- Option 3: file path ---
         elif choice == "3":
             print("\n📎 -- Analyze File (Path) --")
+
             while True:
-                path = input("Enter the full file path: > ").strip().strip('"')
+                path = input(
+                    "Enter the full file path, or BACK for the menu: > "
+                ).strip().strip('"')
+
+                if path.upper() == "BACK":
+                    print(
+                        f"{BLUE}[I/O Manager]{RESET} "
+                        "🛠️  Returning to main menu."
+                    )
+                    break
+
                 if not path:
-                    print(f"  {YELLOW}⚠️  File path cannot be empty.{RESET}")
+                    print(
+                        f"  {YELLOW}⚠️  File path cannot be empty.{RESET}"
+                    )
                     continue
 
-                if not os.path.isfile(path): 
+                if not os.path.isfile(path):
                     print(f"  {RED}❌ No file found at '{path}'.{RESET}")
-                    retry = input("    Try a different path? (y/n): > ").strip().lower()
+
+                    retry = input(
+                        "    Try a different path? (y/n): > "
+                    ).strip().lower()
+
                     if retry == "y":
                         continue
-                    else:
-                        print(f"{BLUE}[I/O Manager]{RESET} 🛠️  User proceeded with an unverified file path.")
-                        break
+
+                    print(
+                        f"{BLUE}[I/O Manager]{RESET} "
+                        "🛠️  Submission cancelled. Returning to main menu."
+                    )
+                    break
 
                 filename = os.path.basename(path)
-                print(f"\n{GREEN}✅ File '{filename}' accepted for analysis.{RESET}\n")
-                break
 
-            if path:
-                print(f"{BLUE}[I/O Manager]{RESET} 🛠️  Submission of file '{filename}' is being handed off for analysis...")
+                print(
+                    f"\n{GREEN}✅ File '{filename}' "
+                    f"accepted for analysis.{RESET}\n"
+                )
+
+                interaction_type, interaction_description = (
+                    collect_user_interaction()
+                )
+
+                print(
+                    f"{BLUE}[I/O Manager]{RESET} 🛠️  "
+                    f"Submission of file '{filename}' "
+                    "is being handed off for analysis..."
+                )
+
                 return {
                     "action": "analyze_submission",
                     "input_type": "file",
                     "input_value": filename,
                     "input_hash": generate_hash(path),
                     "file_path": path,
-                    "interaction_type": "other",
-                    "interaction_description": "User provided a suspicious file"
+                    "interaction_type": interaction_type,
+                    "interaction_description": interaction_description
                 }
 
         # --- Option 4: Historical database query ---
