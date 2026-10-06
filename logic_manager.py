@@ -1,12 +1,26 @@
 """
 logic_manager.py
 
-Applies deterministic cybersecurity business rules to Gemini-enriched
-text analysis.
+Applies local cybersecurity rules to Gemini text-analysis responses
+and parsed VirusTotal results for URLs and files.
 
-Gemini extracts warning indicators and educational information.
-This module determines message risk, user exposure, overall risk,
-flags and routing outcomes.
+For text submissions, validates Gemini warning indicators and applies
+combination rules to determine message risk and scam classification.
+
+For URL and file submissions, uses VirusTotal engine detection counts,
+detection percentages and reputation to determine technical risk.
+Includes reported threat names and categories in the result flags.
+
+Combines message or technical risk with the user's reported actions
+to determine overall risk, response route, priority and recommended
+action.
+
+Rejects incomplete or invalid analysis evidence rather than treating
+it as low risk.
+
+This module does not call Gemini or VirusTotal, collect user input,
+display results or save data. main.py passes analysis results to its
+functions and coordinates the rest of the application.
 
 """
 
@@ -684,10 +698,16 @@ def determine_route(
         )
     )
 
-    exposure_response_required = source_risk_level in {
-        "medium",
-        "high"
-    }
+    exposure_response_required = (
+        source_risk_level in {"medium", "high"}
+        or (
+            overall_risk == "high"
+            and has_critical_exposure(
+                interaction_type,
+                user_exposure
+            )
+        )
+    )
 
     if financial_exposure and exposure_response_required:
         return {
@@ -816,6 +836,13 @@ def evaluate_text_risk(gemini_result, interaction_type):
     active_indicators, invalid_indicators = (
         get_active_indicators(indicators)
     )
+
+    if invalid_indicators:
+        raise ValueError(
+            "The AI response contains missing or invalid warning "
+            "indicators. A reliable risk assessment could not be "
+            "completed. Please try again."
+        )
 
     message_result = determine_message_risk(
         gemini_result,
@@ -948,9 +975,23 @@ def evaluate_vt_risk(
             "VirusTotal did not return any engine statistics."
         )
 
+    completed_count = (
+        malicious_count
+        + suspicious_count
+        + harmless_count
+        + undetected_count
+    )
+
+    if completed_count == 0:
+        raise ValueError(
+            "No security engines completed their assessment. "
+            "The URL or file could not be assessed reliably. "
+            "Please try again later."
+        )
+
     detection_ratio = (
         (malicious_count + suspicious_count)
-        / total_count
+        / completed_count
         * 100
     )
 
