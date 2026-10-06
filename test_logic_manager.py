@@ -1,4 +1,7 @@
-"""Six offline tests of logic_manager using hardcoded AI responses.
+"""Eighteen offline tests of logic_manager using hardcoded responses.
+
+Six text cases use fixed parsed AI responses. Twelve URL/file cases use
+fixed parsed VirusTotal responses, matching the evaluator input format.
 
 Run from the folder containing logic_manager.py:
     python test_logic_manager.py
@@ -138,20 +141,115 @@ def get_test_cases():
     ]
 
 
+def get_vt_test_cases():
+    """Test each action with fixed URL and file evidence."""
+    responses = {
+        "url": {
+            "resource_type": "url",
+            "detection_stats": {
+                "malicious": 0, "suspicious": 2, "harmless": 0,
+                "undetected": 68, "timeout": 0
+            },
+            "reputation": 0,
+            "threat_names": [],
+            "categories": []
+        },
+        "file": {
+            "resource_type": "file",
+            "detection_stats": {
+                "malicious": 8, "suspicious": 0, "harmless": 0,
+                "undetected": 62, "timeout": 0
+            },
+            "reputation": 0,
+            "threat_names": ["trojan"],
+            "categories": []
+        }
+    }
+    # Expectations are fixed here, not calculated using logic_manager.
+    actions = (
+        ("viewed_only", {}, "low",
+         "verification_guidance", "high_risk_guidance"),
+        ("clicked_link", {}, "medium",
+         "verification_guidance", "high_risk_guidance"),
+        ("entered_information", {}, "high",
+         "account_security_response", "account_security_response"),
+        ("opened_or_downloaded_file", {}, "high",
+         "device_security_response", "device_security_response"),
+        ("made_payment_or_shared_banking_details", {}, "high",
+         "urgent_financial_response", "urgent_financial_response"),
+        ("other", {"shared_otp": True}, "high",
+         "urgent_financial_response", "urgent_financial_response")
+    )
+    explanations = {
+        "viewed_only": "Viewing only gives low exposure; source risk remains.",
+        "clicked_link": "Clicking gives medium exposure; source risk remains.",
+        "entered_information": (
+            "Information entry gives high exposure and an account response."
+        ),
+        "opened_or_downloaded_file": (
+            "Opening or downloading gives high exposure and a device response."
+        ),
+        "made_payment_or_shared_banking_details": (
+            "Payment or banking details require an urgent financial response."
+        ),
+        "other": "The fixed Other description reports sharing an OTP."
+    }
+    cases = []
+    for resource_type, response in responses.items():
+        for action, exposure, level, url_route, file_route in actions:
+            source_risk = "medium" if resource_type == "url" else "high"
+            overall = (
+                "medium"
+                if resource_type == "url" and level in {"low", "medium"}
+                else "high"
+            )
+            route = url_route if resource_type == "url" else file_route
+            priority = (
+                "urgent" if route == "urgent_financial_response"
+                else "medium" if route == "verification_guidance"
+                else "high"
+            )
+            cases.append({
+                "name": f"{resource_type.upper()} - {action}",
+                "response": response,
+                "interaction": action,
+                "user_exposure": exposure,
+                "expected": {
+                    "technical_risk": source_risk,
+                    "detection_ratio": 2.86 if resource_type == "url" else 11.43,
+                    "exposure_level": level,
+                    "overall_risk": overall,
+                    "is_malicious": resource_type == "file",
+                    "route": route,
+                    "priority": priority
+                },
+                "explanation": explanations[action]
+            })
+    return cases
+
+
 def run_case(case, number):
     """Call the actual evaluator, print results and verify expectations."""
-    response = make_ai_response(case["active"])
-    if "remove_indicator" in case:
-        del response["indicators"][case["remove_indicator"]]
-
     print(f"\nTEST {number}: {case['name']}")
-    for indicator, evidence in case["active"].items():
-        print(f"  Input: {indicator} = True; evidence: {evidence}")
-    if "remove_indicator" in case:
-        print(f"  Input: {case['remove_indicator']} is missing.")
-    elif not case["active"]:
-        print("  Input: all ten indicators are False.")
+    if "response" in case:
+        response = case["response"]
+        print("  Input: hardcoded parsed VirusTotal response")
+        print(f"  Resource: {response['resource_type']}")
+        print(f"  Engine counts: {response['detection_stats']}")
+        print(f"  Threat names: {response['threat_names']}")
+    else:
+        response = make_ai_response(case["active"])
+        print("  Input: hardcoded parsed AI response")
+        for indicator, evidence in case["active"].items():
+            print(f"  {indicator} = True; evidence: {evidence}")
+        if "remove_indicator" in case:
+            del response["indicators"][case["remove_indicator"]]
+            print(f"  {case['remove_indicator']} is missing.")
+        elif not case["active"]:
+            print("  All ten indicators are False.")
     print(f"  User action: {case['interaction']}")
+    if case.get("user_exposure"):
+        print(f"  Hardcoded Other exposure: {case['user_exposure']}")
 
     if "expected_error" in case:
         expected_error = case["expected_error"]
@@ -163,7 +261,12 @@ def run_case(case, number):
         else:
             raise AssertionError("Invalid input was accepted.")
     else:
-        result = logic.evaluate_text_risk(response, case["interaction"])
+        if "response" in case:
+            result = logic.evaluate_vt_risk(
+                response, case["interaction"], case["user_exposure"]
+            )
+        else:
+            result = logic.evaluate_text_risk(response, case["interaction"])
         mismatches = []
         for field, expected in case["expected"].items():
             actual = result.get(field)
@@ -177,10 +280,10 @@ def run_case(case, number):
 
 
 def run_tests():
-    """Run all six cases; return a nonzero exit code if any case fails."""
-    cases = get_test_cases()
+    """Run all eighteen cases; return a nonzero exit code if any case fails."""
+    cases = get_test_cases() + get_vt_test_cases()
     passed = 0
-    print("LOGIC MANAGER: SIX OFFLINE TESTS")
+    print("LOGIC MANAGER: 18 OFFLINE TESTS")
     for number, case in enumerate(cases, 1):
         try:
             run_case(case, number)
