@@ -1,8 +1,12 @@
 """
 Test logic_manager with fixed AI and VirusTotal responses.
 
-Covers text, URL and file assessments, response routing,
-invalid evidence and overall risk combinations.
+Covers text, URL and file assessments, all six user interaction
+choices, response routing, invalid evidence and overall risk
+combinations.
+
+User actions are supplied directly to logic_manager. This script
+does not test interactive input_manager menus.
 
 No live APIs or database access are used.
 
@@ -47,8 +51,13 @@ def make_ai_response(active=None):
     }
 
 
-def make_vt_response(resource_type, malicious=0, suspicious=0,
-                     undetected=70, timeout=0):
+def make_vt_response(
+    resource_type,
+    malicious=0,
+    suspicious=0,
+    undetected=70,
+    timeout=0
+):
     """Create a fixed parsed VirusTotal response."""
     return {
         "resource_type": resource_type,
@@ -65,10 +74,12 @@ def make_vt_response(resource_type, malicious=0, suspicious=0,
     }
 
 
-def check_equal(actual, expected):
+def check_equal(actual, expected, description="Result"):
+    """Verify that an actual result matches the expected value."""
     if actual != expected:
         raise AssertionError(
-            f"Expected {expected!r}, received {actual!r}"
+            f"{description}: expected {expected!r}, "
+            f"received {actual!r}"
         )
 
 
@@ -273,10 +284,134 @@ def test_overall_risk_matrix():
             message_level,
             exposure_level
         )
-        check_equal(result, expected)
+        check_equal(
+            result,
+            expected,
+            f"Risk combination {message_level}/{exposure_level}"
+        )
+
+
+def test_all_six_interaction_choices():
+    """Check exposure levels for every interaction choice."""
+    cases = (
+        ("viewed_only", {}, "low"),
+        ("clicked_link", {}, "medium"),
+        ("entered_information", {}, "high"),
+        ("opened_or_downloaded_file", {}, "high"),
+        ("made_payment_or_shared_banking_details", {}, "high"),
+        ("other", {"shared_otp": True}, "high")
+    )
+
+    for interaction_type, user_exposure, expected_level in cases:
+        result = logic.determine_user_exposure(
+            interaction_type,
+            user_exposure
+        )
+
+        check_equal(
+            result["level"],
+            expected_level,
+            f"Exposure for {interaction_type}"
+        )
+
+
+def test_text_routes_for_all_six_actions():
+    """Check each interaction choice on a phishing message."""
+    cases = (
+        ("viewed_only", {}, "high_risk_guidance"),
+        ("clicked_link", {}, "high_risk_guidance"),
+        ("entered_information", {}, "account_security_response"),
+        (
+            "opened_or_downloaded_file",
+            {},
+            "device_security_response"
+        ),
+        (
+            "made_payment_or_shared_banking_details",
+            {},
+            "urgent_financial_response"
+        ),
+        (
+            "other",
+            {"shared_otp": True},
+            "urgent_financial_response"
+        )
+    )
+
+    for interaction_type, user_exposure, expected_route in cases:
+        response = make_ai_response({
+            "credential_request": "Enter your account password.",
+            "suspicious_link": "Use this unverified login link."
+        })
+        response["user_exposure"] = user_exposure
+
+        result = logic.evaluate_text_risk(
+            response,
+            interaction_type
+        )
+
+        check_equal(
+            result["overall_risk"],
+            "high",
+            f"Text risk for {interaction_type}"
+        )
+        check_equal(
+            result["route"],
+            expected_route,
+            f"Text route for {interaction_type}"
+        )
+
+
+def test_url_and_file_routes_for_all_six_actions():
+    """Check both VirusTotal workflows with every action."""
+    cases = (
+        ("viewed_only", {}, "high_risk_guidance"),
+        ("clicked_link", {}, "high_risk_guidance"),
+        ("entered_information", {}, "account_security_response"),
+        (
+            "opened_or_downloaded_file",
+            {},
+            "device_security_response"
+        ),
+        (
+            "made_payment_or_shared_banking_details",
+            {},
+            "urgent_financial_response"
+        ),
+        (
+            "other",
+            {"shared_otp": True},
+            "urgent_financial_response"
+        )
+    )
+
+    for resource_type in ("url", "file"):
+        for interaction_type, user_exposure, expected_route in cases:
+            response = make_vt_response(
+                resource_type,
+                malicious=8
+            )
+
+            result = logic.evaluate_vt_risk(
+                response,
+                interaction_type,
+                user_exposure
+            )
+
+            check_equal(
+                result["overall_risk"],
+                "high",
+                f"{resource_type} risk for {interaction_type}"
+            )
+            check_equal(
+                result["route"],
+                expected_route,
+                f"{resource_type} route for {interaction_type}"
+            )
 
 
 def run_tests():
+    """Run all tests and return a success or failure exit code."""
     tests = (
         test_text_no_warnings,
         test_text_phishing,
@@ -294,7 +429,10 @@ def run_tests():
         test_vt_negative_counts,
         test_vt_invalid_number,
         test_vt_timeouts_excluded_from_ratio,
-        test_overall_risk_matrix
+        test_overall_risk_matrix,
+        test_all_six_interaction_choices,
+        test_text_routes_for_all_six_actions,
+        test_url_and_file_routes_for_all_six_actions
     )
     failed = 0
 
@@ -306,7 +444,8 @@ def run_tests():
             test()
         except Exception as error:
             failed += 1
-            print(f"FAIL: {test.__name__}: {error}")
+            print(f"FAIL: {test.__name__}")
+            print(f"      {type(error).__name__}: {error}")
         else:
             print(f"PASS: {test.__name__}")
 
