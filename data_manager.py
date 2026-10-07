@@ -15,6 +15,26 @@ VirusTotal output is stored in:
 - vt_scan_result
 
 Functions only. No classes.
+
+
+Data flow:
+
+Input Manager
+    -> creates a submission record
+
+Gemini Manager
+    -> stores text analysis, detection evidence,
+       and educational guidance
+
+VirusTotal Manager
+    -> stores scan results and detection evidence
+
+Logic Manager
+    -> stores the final risk assessment
+
+Data Manager
+    -> provides stored reports, evidence,
+       statistics, and search results
 """
 
 import json
