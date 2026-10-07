@@ -51,3 +51,99 @@ AttributeError: module 'gemini_manager' has no attribute 'analyse_other_interact
   }
 }
 
+2026-10-07 22:40:09,134 | ERROR | root | Unexpected application error: cannot access local variable 'sub_choice' where it is not associated with a value
+Traceback (most recent call last):
+  File "c:\Users\chozh\OneDrive\Desktop\26INF1103-P4-G1\main.py", line 924, in main
+    request_data = collect_user_request()
+  File "c:\Users\chozh\OneDrive\Desktop\26INF1103-P4-G1\input_manager.py", line 289, in collect_user_request
+    elif sub_choice == "3":
+         ^^^^^^^^^^
+UnboundLocalError: cannot access local variable 'sub_choice' where it is not associated with a value
+2026-10-07 22:40:25,115 | ERROR | root | Unexpected application error: cannot access local variable 'sub_choice' where it is not associated with a value
+Traceback (most recent call last):
+  File "c:\Users\chozh\OneDrive\Desktop\26INF1103-P4-G1\main.py", line 924, in main
+    request_data = collect_user_request()
+  File "c:\Users\chozh\OneDrive\Desktop\26INF1103-P4-G1\input_manager.py", line 289, in collect_user_request
+    elif sub_choice == "3":
+         ^^^^^^^^^^
+UnboundLocalError: cannot access local variable 'sub_choice' where it is not associated with a value
+2026-10-07 22:40:27,994 | ERROR | root | Unexpected application error: cannot access local variable 'sub_choice' where it is not associated with a value
+Traceback (most recent call last):
+  File "c:\Users\chozh\OneDrive\Desktop\26INF1103-P4-G1\main.py", line 924, in main
+    request_data = collect_user_request()
+  File "c:\Users\chozh\OneDrive\Desktop\26INF1103-P4-G1\input_manager.py", line 289, in collect_user_request
+    elif sub_choice == "3":
+         ^^^^^^^^^^
+UnboundLocalError: cannot access local variable 'sub_choice' where it is not associated with a value
+2026-10-07 22:42:00,007 | ERROR | root | Unexpected application error: cannot access local variable 'sub_choice' where it is not associated with a value
+Traceback (most recent call last):
+  File "c:\Users\chozh\OneDrive\Desktop\26INF1103-P4-G1\main.py", line 924, in main
+    request_data = collect_user_request()
+  File "c:\Users\chozh\OneDrive\Desktop\26INF1103-P4-G1\input_manager.py", line 289, in collect_user_request
+    elif sub_choice == "3":
+         ^^^^^^^^^^
+UnboundLocalError: cannot access local variable 'sub_choice' where it is not associated with a value
+2026-10-07 22:42:15,915 | ERROR | root | Unexpected application error: cannot access local variable 'sub_choice' where it is not associated with a value
+Traceback (most recent call last):
+  File "c:\Users\chozh\OneDrive\Desktop\26INF1103-P4-G1\main.py", line 924, in main
+    request_data = collect_user_request()
+  File "c:\Users\chozh\OneDrive\Desktop\26INF1103-P4-G1\input_manager.py", line 289, in collect_user_request
+    elif sub_choice == "3":
+         ^^^^^^^^^^
+UnboundLocalError: cannot access local variable 'sub_choice' where it is not associated with a value
+2026-10-07 22:42:17,532 | ERROR | root | Unexpected application error: cannot access local variable 'sub_choice' where it is not associated with a value
+Traceback (most recent call last):
+  File "c:\Users\chozh\OneDrive\Desktop\26INF1103-P4-G1\main.py", line 924, in main
+    request_data = collect_user_request()
+  File "c:\Users\chozh\OneDrive\Desktop\26INF1103-P4-G1\input_manager.py", line 289, in collect_user_request
+    elif sub_choice == "3":
+         ^^^^^^^^^^
+UnboundLocalError: cannot access local variable 'sub_choice' where it is not associated with a value
+2026-10-07 22:42:18,016 | ERROR | root | Unexpected application error: cannot access local variable 'sub_choice' where it is not associated with a value
+Traceback (most recent call last):
+  File "c:\Users\chozh\OneDrive\Desktop\26INF1103-P4-G1\main.py", line 924, in main
+    request_data = collect_user_request()
+  File "c:\Users\chozh\OneDrive\Desktop\26INF1103-P4-G1\input_manager.py", line 289, in collect_user_request
+    elif sub_choice == "3":
+         ^^^^^^^^^^
+UnboundLocalError: cannot access local variable 'sub_choice' where it is not associated with a value
+2026-10-07 22:42:18,330 | ERROR | root | Unexpected application error: cannot access local variable 'sub_choice' where it is not associated with a value
+Traceback (most recent call last):
+  File "c:\Users\chozh\OneDrive\Desktop\26INF1103-P4-G1\main.py", line 924, in main
+    request_data = collect_user_request()
+  File "c:\Users\chozh\OneDrive\Desktop\26INF1103-P4-G1\input_manager.py", line 289, in collect_user_request
+    elif sub_choice == "3":
+         ^^^^^^^^^^
+UnboundLocalError: cannot access local variable 'sub_choice' where it is not associated with a value
+2026-10-07 22:42:18,562 | ERROR | root | Unexpected application error: cannot access local variable 'sub_choice' where it is not associated with a value
+Traceback (most recent call last):
+  File "c:\Users\chozh\OneDrive\Desktop\26INF1103-P4-G1\main.py", line 924, in main
+    request_data = collect_user_request()
+  File "c:\Users\chozh\OneDrive\Desktop\26INF1103-P4-G1\input_manager.py", line 289, in collect_user_request
+    elif sub_choice == "3":
+         ^^^^^^^^^^
+UnboundLocalError: cannot access local variable 'sub_choice' where it is not associated with a value
+2026-10-07 22:42:18,738 | ERROR | root | Unexpected application error: cannot access local variable 'sub_choice' where it is not associated with a value
+Traceback (most recent call last):
+  File "c:\Users\chozh\OneDrive\Desktop\26INF1103-P4-G1\main.py", line 924, in main
+    request_data = collect_user_request()
+  File "c:\Users\chozh\OneDrive\Desktop\26INF1103-P4-G1\input_manager.py", line 289, in collect_user_request
+    elif sub_choice == "3":
+         ^^^^^^^^^^
+UnboundLocalError: cannot access local variable 'sub_choice' where it is not associated with a value
+2026-10-07 22:42:18,904 | ERROR | root | Unexpected application error: cannot access local variable 'sub_choice' where it is not associated with a value
+Traceback (most recent call last):
+  File "c:\Users\chozh\OneDrive\Desktop\26INF1103-P4-G1\main.py", line 924, in main
+    request_data = collect_user_request()
+  File "c:\Users\chozh\OneDrive\Desktop\26INF1103-P4-G1\input_manager.py", line 289, in collect_user_request
+    elif sub_choice == "3":
+         ^^^^^^^^^^
+UnboundLocalError: cannot access local variable 'sub_choice' where it is not associated with a value
+2026-10-07 22:42:20,297 | ERROR | root | Unexpected application error: cannot access local variable 'sub_choice' where it is not associated with a value
+Traceback (most recent call last):
+  File "c:\Users\chozh\OneDrive\Desktop\26INF1103-P4-G1\main.py", line 924, in main
+    request_data = collect_user_request()
+  File "c:\Users\chozh\OneDrive\Desktop\26INF1103-P4-G1\input_manager.py", line 289, in collect_user_request
+    elif sub_choice == "3":
+         ^^^^^^^^^^
+UnboundLocalError: cannot access local variable 'sub_choice' where it is not associated with a value

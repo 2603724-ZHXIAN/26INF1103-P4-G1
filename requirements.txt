@@ -2,3 +2,4 @@ validators
 jsonschema
 python-dotenv
 requests
+pick
