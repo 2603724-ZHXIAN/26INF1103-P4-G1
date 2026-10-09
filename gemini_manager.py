@@ -901,3 +901,168 @@ Return your response in clean, structured Markdown using the exact headings belo
 - Exact steps individuals and SME staff should take immediately to safeguard themselves.
 - Official reporting avenues (e.g., ScamShield, bank emergency kill-switches, anti-scam hotlines).
 """.strip()
+
+
+def build_other_interaction_schema():
+    """Return schema for user exposure extracted from custom interaction text."""
+    return {
+        "type": "object",
+        "properties": {
+            "clicked_or_opened_link": {"type": "boolean"},
+            "entered_credentials": {"type": "boolean"},
+            "shared_personal_information": {"type": "boolean"},
+            "downloaded_or_opened_file": {"type": "boolean"},
+            "shared_otp": {"type": "boolean"},
+            "made_payment": {"type": "boolean"},
+            "shared_banking_details": {"type": "boolean"},
+            "installed_software": {"type": "boolean"},
+            "granted_remote_access": {"type": "boolean"},
+            "description_summary": {"type": "string"}
+        },
+        "required": [
+            "clicked_or_opened_link",
+            "entered_credentials",
+            "shared_personal_information",
+            "downloaded_or_opened_file",
+            "shared_otp",
+            "made_payment",
+            "shared_banking_details",
+            "installed_software",
+            "granted_remote_access",
+            "description_summary"
+        ]
+    }
+
+
+def analyse_other_interaction(interaction_description):
+    """Interpret a user's custom interaction description using Gemini."""
+    if not isinstance(interaction_description, str) or not interaction_description.strip():
+        return {"error": "Interaction description cannot be empty."}
+
+    prompt = (
+        "You are evaluating what actions a user took regarding a suspicious message, link, or file.\n"
+        "Extract only actions explicitly reported by the user.\n"
+        "Do not assume actions occurred if they were not reported.\n"
+        "Evaluate every exposure flag and provide a concise 1-sentence summary.\n\n"
+        f"User description: {interaction_description.strip()}"
+    )
+
+    return send_structured_gemini_request(
+        prompt,
+        build_other_interaction_schema(),
+        lambda data: data,
+        "interaction analysis"
+    )
+
+
+def fetch_emerging_threat_radar(topic=None):
+    """Query live threat intelligence using Gemini with Google Search grounding."""
+    try:
+        api_key, model_name = load_gemini_config()
+    except ValueError as error:
+        return {"error": str(error)}
+
+    prompt = build_threat_radar_prompt(topic)
+
+    # Primary approach: Google GenAI SDK
+    try:
+        from google import genai
+        from google.genai import types
+
+        client = genai.Client(api_key=api_key)
+        response = client.models.generate_content(
+            model=model_name,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                temperature=0.3,
+                tools=[types.Tool(google_search=types.GoogleSearch())]
+            )
+        )
+
+        sources = []
+        search_queries = []
+
+        try:
+            candidate = response.candidates[0]
+            metadata = getattr(candidate, "grounding_metadata", None)
+            if metadata:
+                if getattr(metadata, "web_search_queries", None):
+                    search_queries = list(metadata.web_search_queries)
+
+                chunks = getattr(metadata, "grounding_chunks", None) or []
+                for chunk in chunks:
+                    web = getattr(chunk, "web", None)
+                    if web and getattr(web, "uri", None):
+                        sources.append({
+                            "title": getattr(web, "title", "Threat Advisory"),
+                            "url": getattr(web, "uri", "")
+                        })
+        except Exception as meta_err:
+            LOGGER.warning("Could not extract grounding metadata: %s", meta_err)
+
+        return {
+            "content": response.text,
+            "sources": sources,
+            "search_queries": search_queries,
+            "model_name": model_name
+        }
+
+    except Exception as sdk_error:
+        LOGGER.warning(
+            "Google GenAI SDK call failed (%s). Attempting REST fallback...",
+            sdk_error
+        )
+        # Fallback approach: Direct REST API via requests
+        try:
+            endpoint = (
+                "https://generativelanguage.googleapis.com/"
+                f"v1beta/models/{model_name}:generateContent"
+            )
+            request_body = {
+                "contents": [
+                    {
+                        "role": "user",
+                        "parts": [{"text": prompt}]
+                    }
+                ],
+                "tools": [{"google_search": {}}],
+                "generationConfig": {"temperature": 0.3}
+            }
+
+            res = requests.post(
+                endpoint,
+                headers={
+                    "Content-Type": "application/json",
+                    "x-goog-api-key": api_key
+                },
+                json=request_body,
+                timeout=60
+            )
+            res.raise_for_status()
+
+            data = res.json()
+            cand = data["candidates"][0]
+            content_text = cand["content"]["parts"][0]["text"]
+            meta = cand.get("groundingMetadata", {})
+            sources = []
+            for chunk in meta.get("groundingChunks", []):
+                web = chunk.get("web", {})
+                if web.get("uri"):
+                    sources.append({
+                        "title": web.get("title", "Threat Advisory"),
+                        "url": web.get("uri")
+                    })
+            search_queries = meta.get("webSearchQueries", [])
+
+            return {
+                "content": content_text,
+                "sources": sources,
+                "search_queries": search_queries,
+                "model_name": model_name
+            }
+        except Exception as rest_error:
+            LOGGER.error("Threat Radar REST fallback failed: %s", rest_error)
+            return {
+                "error": f"Failed to retrieve threat radar: {sdk_error}",
+                "details": str(rest_error)
+            }
