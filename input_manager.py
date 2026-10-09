@@ -378,38 +378,12 @@ def collect_user_request():
                 print(f"{BLUE}[I/O Manager]{RESET} 🛠️  Returning to main menu.")
 
             if results:
-                from pick import pick
-
-                BACK_LABEL = "← Back to menu"
-                PREVIEW_LEN = 70
-                QUIT_KEYS = (ord("q"), ord("Q"), 27)  # q, Q, Esc
-
-                def make_label(r):
-                    val = str(r.get("input_value", "")).replace("\n", " ").strip()
-                    preview = (val[:PREVIEW_LEN] + "...") if len(val) > PREVIEW_LEN else val
-                    risk = str(r.get("risk_category", "Unknown")).upper()
-                    return f"ID:{r['submission_id']} | {r['input_type']:4} | {risk:8} | \"{preview}\""
-
                 while True:
-                    # Back is the first row; results follow, so result index = idx - 1
-                    options = [BACK_LABEL] + [make_label(r) for r in results]
-                    title = (
-                        "🗄️  Results  —  ↑↓ navigate   Enter open   "
-                        "q / Esc = back to menu"
-                    )
-                    selected_label, idx = pick(
-                        options,
-                        title,
-                        indicator="▶",
-                        default_index=1,          # start on first result
-                        quit_keys=QUIT_KEYS,
-                    )
-
-                    # Quit key pressed, or Back row chosen
-                    if selected_label is None or idx < 1:
+                    idx = browse_results(results)
+                    if idx is None:
                         break
 
-                    selected_r = results[idx - 1]
+                    selected_r = results[idx]
                     report = db.get_submission_report(DB_PATH, selected_r["submission_id"])
                     if report:
                         print(f"\n{CYAN}{'='*BANNER_WIDTH}{RESET}")
