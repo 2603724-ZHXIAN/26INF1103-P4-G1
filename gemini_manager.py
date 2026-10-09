@@ -468,8 +468,8 @@ def send_groq_fallback_request(prompt: str, response_validator, operation_name: 
         json_prompt = (
             f"{prompt}\n\n"
             "You must return ONLY valid JSON matching the schema that was "
-            "provided to you. Do NOT wrap the JSON in markdown fences or add "
-            "any extra commentary."
+            "provided to you. You must use the exact indicator property names specified in the schema. "
+            "Do NOT wrap the JSON in markdown fences or add any extra commentary."
         )
         messages = [{"role": "user", "content": json_prompt}]
         
@@ -484,12 +484,81 @@ def send_groq_fallback_request(prompt: str, response_validator, operation_name: 
         
         raw_content = response_body["choices"][0]["message"]["content"]
         parsed_result = json.loads(raw_content)
+        
+        defaults = {
+            "message_classification": "uncertain",
+            "primary_threat_type": "none",
+            "analysis_confidence": "low",
+            "language": "english",
+            "message_type": "unknown",
+            "claimed_entity": "",
+            "requested_actions": [],
+            "possible_intents": [],
+            "extracted_urls": [],
+            "extracted_contacts": [],
+            "suspected_threat_types": [],
+            "indicators": {
+                "urgency_pressure": {"present": False, "evidence": ""},
+                "authority_impersonation": {"present": False, "evidence": ""},
+                "credential_request": {"present": False, "evidence": ""},
+                "personal_information_request": {"present": False, "evidence": ""},
+                "payment_request": {"present": False, "evidence": ""},
+                "otp_request": {"present": False, "evidence": ""},
+                "suspicious_link": {"present": False, "evidence": ""},
+                "download_request": {"present": False, "evidence": ""},
+                "threatening_language": {"present": False, "evidence": ""},
+                "reward_or_prize": {"present": False, "evidence": ""}
+            },
+            "other_warning_signs": [],
+            "user_exposure": {
+                "clicked_or_opened_link": False,
+                "entered_credentials": False,
+                "shared_personal_information": False,
+                "downloaded_or_opened_file": False,
+                "shared_otp": False,
+                "made_payment": False,
+                "shared_banking_details": False,
+                "installed_software": False,
+                "granted_remote_access": False,
+                "description_summary": ""
+            },
+            "education": {
+                "threat_explanations": [],
+                "threat_summary": "",
+                "what_it_is": "",
+                "why_dangerous": [],
+                "preventive_steps": [],
+                "recovery_steps": [],
+                "limitations": []
+            }
+        }
+        
+        for key, default_value in defaults.items():
+            if key not in parsed_result:
+                parsed_result[key] = default_value
+                
+        if "indicators" in parsed_result and isinstance(parsed_result["indicators"], dict):
+            ind = parsed_result["indicators"]
+            mapping = {
+                "urgency": "urgency_pressure",
+                "link": "suspicious_link",
+                "financial_threat": "payment_request",
+                "impersonation": "authority_impersonation",
+                "social_engineering": "suspicious_link"
+            }
+            for old_key, new_key in mapping.items():
+                if old_key in ind and new_key not in ind:
+                    ind[new_key] = ind.pop(old_key)
+            
+            for req_ind in defaults["indicators"]:
+                if req_ind not in ind:
+                    ind[req_ind] = {"present": False, "evidence": ""}
+                    
         return response_validator(parsed_result)
         
     except requests.HTTPError as http_err:
         LOGGER.error(
-            "Groq fallback %s - HTTP %s: %s",
-            operation_name,
+            "Groq fallback HTTP %s: %s",
             http_err.response.status_code,
             http_err.response.text,
         )
