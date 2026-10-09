@@ -3,6 +3,7 @@ import os
 import subprocess
 import sys
 
+
 try:
     import validators
 except ImportError:
@@ -410,7 +411,42 @@ def collect_user_request():
                     risk = c.get("risk_category", "Unknown").capitalize()
                     total = c.get("total", 0)
                     print(f"  - {risk}: {total} incidents")
+
+            # --- Allow user to explore a trending threat ---
+            if threats:
+                print("\nSelect a threat type to view its latest incidents.")
+                print("Enter 0 to return to the main menu.")
+
+                while True:
+                    selection = input(
+                        f"Select an option (0-{len(threats)}): > "
+                    ).strip()
+
+                    if selection == "0":
+                        break
+
+                    if not selection.isdigit():
+                        print(
+                            f"{YELLOW}⚠️  Please enter a valid number.{RESET}"
+                        )
+                        continue
+
+                    selection = int(selection)
+
+                    if selection < 1 or selection > len(threats):
+                        print(
+                            f"{YELLOW}⚠️  Please select one of the "
+                            f"listed threat types.{RESET}"
+                        )
+                        continue
+
+                    selected_threat = threats[
+                        selection - 1
+                    ]["primary_threat_type"]
+
+
             print()
+
             # loops back to menu for option 5
 
         # --- Option 6: Emerging Threat & Scam Radar ---
