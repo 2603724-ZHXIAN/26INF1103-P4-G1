@@ -421,85 +421,73 @@ def extract_response_text(response_data):
             "Gemini returned an unexpected response structure."
         ) from error
 
+def send_openrouter_fallback_request(
+    prompt,
+    response_schema,
+    response_validator,
+    operation_name
+):
+    """Send a fallback request to OpenRouter API when Gemini fails."""
+    print(f"[OpenRouter] Attempting fallback for {operation_name}...")
 
-def _load_groq_credentials():
-    """Load GROQ_API_KEY and GROQ_MODEL from the project .env file."""
     env_path = Path(__file__).resolve().parent / ".env"
     load_dotenv(dotenv_path=env_path, override=True)
-    api_key = os.getenv("GROQ_API_KEY")
-    model = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+    api_key = os.getenv("OPENROUTER_API_KEY")
+
     if not api_key:
-        raise RuntimeError("GROQ_API_KEY not found in environment.")
-    return api_key, model
+        return {"error": "OPENROUTER_API_KEY missing for fallback."}
 
-
-def _make_groq_chat_request(
-    api_key: str,
-    model: str,
-    messages: list[dict],
-    temperature: float = 0.1,
-    response_format: dict | None = None,
-    timeout: int = 60,
-) -> dict:
-    """Low-level wrapper around the Groq chat completions endpoint."""
-    url = "https://api.groq.com/openai/v1/chat/completions"
+    endpoint = "https://openrouter.ai/api/v1/chat/completions"
     headers = {
-        "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
-        "Accept": "application/json",
+        "Authorization": f"Bearer {api_key}",
+        "HTTP-Referer": "http://localhost", # Optional, but OpenRouter requests it
+        "X-Title": "ThreatAnalysisApp"      # Optional, name of your app
     }
+
+    system_message = (
+        "You must return ONLY valid JSON matching this schema:\n"
+        + json.dumps(response_schema)
+    )
+
     payload = {
-        "model": model,
-        "messages": messages,
-        "temperature": temperature,
+        "model": "apodex/apodex-1.1-mini:free",
+        "messages": [
+            {"role": "system", "content": system_message},
+            {"role": "user", "content": prompt}
+        ],
+        "response_format": {"type": "json_object"},
+        "temperature": 0.1
     }
-    if response_format:
-        payload["response_format"] = response_format
-    
-    resp = requests.post(url, headers=headers, json=payload, timeout=timeout)
-    resp.raise_for_status()
-    return resp.json()
 
-
-def send_groq_fallback_request(prompt: str, response_validator, operation_name: str):
-    """Send a fallback request to the Groq API."""
     try:
-        api_key, model_name = _load_groq_credentials()
-        json_prompt = (
-            f"{prompt}\n\n"
-            "You must return ONLY valid JSON matching the schema that was "
-            "provided to you. Do NOT wrap the JSON in markdown fences or add "
-            "any extra commentary."
+        response = requests.post(
+            endpoint,
+            headers=headers,
+            json=payload,
+            timeout=60
         )
-        messages = [{"role": "user", "content": json_prompt}]
-        
-        response_body = _make_groq_chat_request(
-            api_key=api_key,
-            model=model_name,
-            messages=messages,
-            temperature=0.1,
-            response_format={"type": "json_object"},
-            timeout=60,
-        )
-        
-        raw_content = response_body["choices"][0]["message"]["content"]
-        parsed_result = json.loads(raw_content)
-        return response_validator(parsed_result)
-        
-    except requests.HTTPError as http_err:
-        LOGGER.error(
-            "Groq fallback %s - HTTP %s: %s",
-            operation_name,
-            http_err.response.status_code,
-            http_err.response.text,
-        )
-        return {"error": f"Groq fallback HTTP error: {http_err}"}
-    except Exception as exc:
-        LOGGER.exception(
-            "Groq fallback %s failed with unexpected error", operation_name
-        )
-        return {"error": f"Groq fallback failed: {str(exc)}"}
+        response.raise_for_status()
 
+        data = response.json()
+        content = data["choices"][0]["message"]["content"].strip()
+        
+        # Clean markdown formatting if the model wraps the JSON
+        if content.startswith("```json"):
+            content = content[7:]
+        if content.endswith("```"):
+            content = content[:-3]
+            
+        parsed = json.loads(content.strip())
+
+        return response_validator(parsed)
+
+    except Exception as error:
+        LOGGER.error("OpenRouter fallback failed: %s", error)
+        return {
+            "error": "Both Gemini and OpenRouter fallback failed.",
+            "details": str(error)
+        }
 
 def send_structured_gemini_request(
     prompt,
@@ -614,8 +602,16 @@ def send_structured_gemini_request(
 
         except requests.exceptions.HTTPError as error:
             error_response = error.response
-            status_code = error_response.status_code if error_response is not None else "unknown"
-            response_text = error_response.text if error_response is not None else str(error)
+            status_code = (
+                error_response.status_code
+                if error_response is not None
+                else "unknown"
+            )
+            response_text = (
+                error_response.text
+                if error_response is not None
+                else str(error)
+            )
 
             LOGGER.error(
                 "Gemini %s returned HTTP %s on attempt %s: %s",
@@ -625,15 +621,38 @@ def send_structured_gemini_request(
                 response_text
             )
 
-            if status_code in {429, 500, 502, 503, 504} and attempt_number < MAX_API_ATTEMPTS:
-                last_error = f"Gemini returned HTTP {status_code}."
-                wait_seconds = min(pow(2, attempt_number), 30)
-                print(f"[Gemini] HTTP {status_code}. Retrying in {wait_seconds} seconds...")
+            if (
+                status_code in {
+                    429,
+                    500,
+                    502,
+                    503,
+                    504
+                }
+                and attempt_number < MAX_API_ATTEMPTS
+            ):
+                last_error = (
+                    f"Gemini returned HTTP {status_code}."
+                )
+                wait_seconds = min(
+                    2 ** attempt_number,
+                    30
+                )
+
+                print(
+                    f"[Gemini] HTTP {status_code}. "
+                    f"Retrying in {wait_seconds} seconds..."
+                )
+
                 time.sleep(wait_seconds)
                 continue
 
-            last_error = f"Gemini returned HTTP {status_code}."
-            break
+            return {
+                "error": (
+                    f"Gemini returned HTTP {status_code}."
+                ),
+                "details": response_text
+            }
 
         except requests.exceptions.RequestException as error:
             LOGGER.error(
@@ -675,12 +694,18 @@ def send_structured_gemini_request(
             time.sleep(wait_seconds)
 
     LOGGER.error(
-        "Gemini %s failed after %s attempts: %s. Attempting Groq fallback.",
+        "Gemini %s failed after %s attempts: %s",
         operation_name,
         MAX_API_ATTEMPTS,
         last_error
     )
-    return send_groq_fallback_request(prompt, response_validator, operation_name)
+
+    return send_openrouter_fallback_request(
+        prompt,
+        response_schema,
+        response_validator,
+        operation_name
+    )
 
 
 def validate_analysis_response(analysis):
