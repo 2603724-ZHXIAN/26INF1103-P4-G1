@@ -384,6 +384,7 @@ def collect_user_request():
 
         # --- Option 5: Common Threat Summaries (Low/Moderate/High) ---
         elif choice == "5":
+            from pick import pick
             print(f"{IO_TAG} 🛠️  Fetching top trending attacks/scams.")
 
             threats = db.get_top_threat_types(DB_PATH)
