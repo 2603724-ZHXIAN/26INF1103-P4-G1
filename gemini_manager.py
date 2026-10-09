@@ -867,3 +867,37 @@ def analyse_vt_for_education(
         validate_vt_education_response,
         "VirusTotal education"
     )
+
+
+def build_threat_radar_prompt(topic=None):
+    current_time_context = "this month in 2026 / recent weeks"
+    focus_target = f"specifically focusing on: '{topic}'" if topic else "covering the top emerging consumer and enterprise scam campaigns"
+
+    return f"""
+You are a Cyber Threat Intelligence Analyst for an educational cybersecurity engine.
+Use the Google Search tool to search for the most recent, active scams, phishing campaigns, and malware delivery trends reported {current_time_context}, {focus_target}.
+
+Search for real-world security advisories, police warnings (e.g. SPF/ScamShield, FTC, CERT), and news alerts.
+
+Return your response in clean, structured Markdown using the exact headings below:
+
+## THREAT CAMPAIGN OVERVIEW
+- Summary of the most prevalent emerging threats right now.
+- Primary delivery channels (SMS/Smishing, WhatsApp/Telegram, Malicious Sponsored Ads, Email).
+- Targeted victims or organisations being impersonated.
+
+## ACTIVE ATTACK TACTICS & PSYCHOLOGICAL TRIGGERS
+- Step-by-step breakdown of how the scam is executed.
+- Social engineering tricks used (e.g., artificial urgency, fear of account suspension, fake government subsidies).
+
+## KEY RED FLAGS TO SPOT
+- Distinct signs that expose the communication as fraudulent.
+- Specific phrasing, spoofed sender patterns, or unusual call-to-actions.
+
+## VERIFIED REAL-WORLD EXAMPLES
+- 2 to 3 brief real-world examples or recent high-profile cases reported in the news.
+
+## ACTIONABLE DEFENSE & REPORTING GUIDANCE
+- Exact steps individuals and SME staff should take immediately to safeguard themselves.
+- Official reporting avenues (e.g., ScamShield, bank emergency kill-switches, anti-scam hotlines).
+""".strip()
