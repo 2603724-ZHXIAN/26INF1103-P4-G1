@@ -510,7 +510,66 @@ def collect_user_request():
 
                         selected_r = results[idx - 1]
 
+                        report = db.get_submission_report(
+                            DB_PATH,
+                            selected_r["submission_id"]
+                        )
 
+                        if report:
+                            print(
+                                f"\n{CYAN}"
+                                f"{'=' * BANNER_WIDTH}"
+                                f"{RESET}"
+                            )
+
+                            print(
+                                f"{BOLD}FULL INCIDENT REPORT "
+                                f"(ID: "
+                                f"{selected_r['submission_id']})"
+                                f"{RESET}"
+                            )
+
+                            print(
+                                f"{CYAN}"
+                                f"{'=' * BANNER_WIDTH}"
+                                f"{RESET}"
+                            )
+
+                            for k, v in report.items():
+                                if v is not None and v != "":
+                                    label = (
+                                        str(k)
+                                        .replace("_", " ")
+                                        .title()
+                                    )
+
+                                    print(
+                                        f"{BOLD}{label}:{RESET} {v}"
+                                    )
+
+                            print(
+                                f"{CYAN}"
+                                f"{'=' * BANNER_WIDTH}"
+                                f"{RESET}"
+                            )
+
+                            input(
+                                "\nPress Enter to return "
+                                "to results list..."
+                            )
+
+                        else:
+                            print(
+                                f"{YELLOW}⚠️  No report found "
+                                f"for that ID.{RESET}"
+                            )
+
+                            input(
+                                "\nPress Enter to continue..."
+                            )
+
+                    # Finished exploring selected threat
+                    break
 
             print()
 
