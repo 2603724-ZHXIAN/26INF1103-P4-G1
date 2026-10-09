@@ -98,17 +98,21 @@ def collect_user_request():
         print(f"  {YELLOW}[3]{RESET} 📎 Analyze File (Path)")
         print(f"  {YELLOW}[4]{RESET} 🗄️  Query Historical Incident Database")
         print(f"  {YELLOW}[5]{RESET} 📈 Top Trending Attacks / Scams")
-        print(f"  {YELLOW}[6]{RESET} 🚪 Exit")
+        print(
+            f"  {YELLOW}[6]{RESET} 🌐 "
+            "Emerging Threat & Scam Radar (Live Web Grounding)"
+        )
+        print(f"  {YELLOW}[7]{RESET} 🚪 Exit")
         print(DIM + "-" * BANNER_WIDTH + RESET)
 
         # Menu Options
-        choice = input("Select an option (1-6): > ").strip()
-        while choice not in {"1", "2", "3", "4", "5", "6"}:
+        choice = input("Select an option (1-7): > ").strip()
+        while choice not in {"1", "2", "3", "4", "5", "6", "7"}:
             print(
                 f"  {RED}❌ Invalid choice. "
-                f"Please enter a number between 1 and 6.{RESET}"
+                f"Please enter a number between 1 and 7.{RESET}"
             )
-            choice = input("Select an option (1-6): > ").strip()
+            choice = input("Select an option (1-7): > ").strip()
         print(f"{IO_TAG} 🛠️  Option [{choice}] has been selected.")
 
         # --- Option 1: text/email body ---
@@ -409,8 +413,26 @@ def collect_user_request():
             print()
             # loops back to menu for option 5
 
-        # --- Option 6: Exit ---
+        # --- Option 6: Emerging Threat & Scam Radar ---
         elif choice == "6":
+            print(
+                f"\n{BOLD}{CYAN}🌐 -- Emerging Threat & Scam Radar "
+                f"(Live AI Web Grounding) --{RESET}"
+            )
+            print(
+                "Enter a specific topic or keyword (e.g. 'Telegram investment', 'CPF SMS', 'Invoice fraud'),"
+            )
+            print(
+                "or press ENTER to scan all top emerging threats right now:\n"
+            )
+            topic = input("> ").strip()
+            return {
+                "action": "emerging_threat_radar",
+                "topic": topic if topic else None
+            }
+
+        # --- Option 7: Exit ---
+        elif choice == "7":
             confirm = input(
                 "Are you sure you want to exit? (y/n): > "
             ).strip().lower()
