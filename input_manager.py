@@ -445,6 +445,73 @@ def collect_user_request():
                     ]["primary_threat_type"]
 
 
+                    # Retrieve latest incidents for selected threat type
+                    results = db.get_incidents_by_threat_type(
+                        DB_PATH,
+                        selected_threat
+                    )
+
+                    if not results:
+                        print(
+                            f"{YELLOW}⚠️  No incidents found for "
+                            f"'{selected_threat}'.{RESET}"
+                        )
+                        break
+
+                    # --- Display selectable incident list ---
+                    BACK_LABEL = "← Back to menu"
+                    PREVIEW_LEN = 70
+                    QUIT_KEYS = (ord("q"), ord("Q"), 27)
+
+                    def make_label(r):
+                        val = str(
+                            r.get("input_value", "")
+                        ).replace("\n", " ").strip()
+
+                        preview = (
+                            val[:PREVIEW_LEN] + "..."
+                            if len(val) > PREVIEW_LEN
+                            else val
+                        )
+
+                        risk = str(
+                            r.get("risk_category", "Unknown")
+                        ).upper()
+
+                        return (
+                            f"ID:{r['submission_id']} | "
+                            f"{r['input_type'][:4]} | "
+                            f"{risk:8} | "
+                            f"\"{preview}\""
+                        )
+
+                    while True:
+                        options = [BACK_LABEL] + [
+                            make_label(r) for r in results
+                        ]
+
+                        title = (
+                            f"📈 {selected_threat.upper()} INCIDENTS"
+                            "  —  ↑↓ navigate   Enter open   "
+                            "q / Esc = back"
+                        )
+
+                        selected_label, idx = pick(
+                            options,
+                            title,
+                            indicator="▶",
+                            default_index=1,
+                            quit_keys=QUIT_KEYS
+                        )
+
+                        # User selected Back, q, Q or Esc
+                        if selected_label is None or idx < 1:
+                            break
+
+                        selected_r = results[idx - 1]
+
+
+
             print()
 
             # loops back to menu for option 5
