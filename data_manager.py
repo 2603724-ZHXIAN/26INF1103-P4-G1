@@ -1186,6 +1186,35 @@ def get_top_threat_types(db_path, limit=10):
 
     return [dict(row) for row in rows]
 
+def get_incidents_by_threat_type(db_path, threat_type, limit=10):
+    """Return the latest incidents for a selected threat type."""
+
+    query = """
+        SELECT
+            s.submission_id,
+            s.input_type,
+            s.input_value,
+            s.created_at,
+            ta.primary_threat_type,
+            fa.risk_category
+        FROM submission AS s
+        JOIN text_analysis AS ta
+            ON ta.submission_id = s.submission_id
+        LEFT JOIN final_assessment AS fa
+            ON fa.submission_id = s.submission_id
+        WHERE ta.primary_threat_type = ?
+        ORDER BY s.created_at DESC
+        LIMIT ?
+    """
+
+    with database_connection(db_path) as connection:
+        rows = connection.execute(
+            query,
+            (threat_type, limit)
+        ).fetchall()
+
+    return [dict(row) for row in rows]
+
 
 def get_top_indicators(db_path, limit=10):
     """Return the most frequently detected Gemini indicators."""
