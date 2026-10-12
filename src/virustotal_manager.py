@@ -29,7 +29,7 @@ HASH_PATTERN = re.compile(r"^[a-fA-F0-9]+$")
 
 def load_virustotal_config():
     """Load and validate VirusTotal configuration from the environment."""
-    load_dotenv()
+    load_dotenv(dotenv_path=Path(__file__).resolve().parent.parent / ".env")
 
     api_key = os.getenv("VT_API_KEY", "").strip()
 

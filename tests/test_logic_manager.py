@@ -11,7 +11,7 @@ No Gemini, VirusTotal, database or network calls are made.
 
 import sys
 
-import logic_manager as logic
+from src import logic_manager as logic 
 
 
 def make_ai_response(active):

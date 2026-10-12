@@ -25,7 +25,7 @@ MAX_API_ATTEMPTS = 5
 
 def load_gemini_config():
     """Load the Gemini API configuration from the project .env file."""
-    env_path = Path(__file__).resolve().parent / ".env"
+    env_path = Path(__file__).resolve().parent.parent / ".env"
     load_dotenv(dotenv_path=env_path, override=True)
 
     api_key = os.getenv("GEMINI_API_KEY")

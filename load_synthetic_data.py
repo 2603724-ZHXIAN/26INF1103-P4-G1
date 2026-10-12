@@ -15,7 +15,7 @@ import json
 import sys
 from pathlib import Path
 
-import data_manager
+from src import data_manager
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_FILE = BASE_DIR / "data" / "synthetic_data.json"

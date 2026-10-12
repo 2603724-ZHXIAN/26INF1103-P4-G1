@@ -2,12 +2,12 @@
 
 import logging
 
-import data_manager as db
-import gemini_manager as gemini
-import logic_manager as logic
-from config import DB_PATH
-from input_manager import collect_user_request
-import virustotal_manager as vt
+from . import data_manager as db
+from . import gemini_manager as gemini
+from . import logic_manager as logic
+from .config import DB_PATH
+from .input_manager import collect_user_request
+from . import virustotal_manager as vt
 
 
 logging.basicConfig(

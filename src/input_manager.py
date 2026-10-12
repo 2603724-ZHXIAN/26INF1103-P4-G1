@@ -321,8 +321,8 @@ def collect_user_request():
 
         # --- Option 4: Historical database query ---
         elif choice == "4":
-            import data_manager as db
-            from config import DB_PATH
+            from . import data_manager as db
+            from .config import DB_PATH
             
             def format_result(r):
                 dt = str(r.get("created_at", ""))[:16].replace("T", " ")
@@ -402,8 +402,8 @@ def collect_user_request():
 
         # --- Option 5: Common Threat Summaries (Low/Moderate/High)  ---
         elif choice == "5":
-            import data_manager as db
-            from config import DB_PATH
+            from . import data_manager as db
+            from .config import DB_PATH
             print(f"{BLUE}[I/O Manager]{RESET} 🛠️  Fetching top trending attacks/scams.")
             
             threats = db.get_top_threat_types(DB_PATH)
