@@ -4,6 +4,7 @@ import subprocess
 import sys
 import curses
 import locale
+import sys
 
 try:
     import validators
@@ -464,7 +465,8 @@ def collect_user_request():
 
         # --- Option 5: Common Threat Summaries (Low/Moderate/High) ---
         elif choice == "5":
-            print(f"{IO_TAG} 🛠️  Fetching top trending attacks/scams.")    
+            from pick import pick
+            print(f"{IO_TAG} 🛠️  Fetching top trending attacks/scams.")
             threats = db.get_top_threat_types(DB_PATH)
             counts = db.get_risk_category_counts(DB_PATH)
 
@@ -490,7 +492,168 @@ def collect_user_request():
                     risk = c.get("risk_category", "Unknown").capitalize()
                     total = c.get("total", 0)
                     print(f"  - {risk}: {total} incidents")
+
+            # --- Allow user to explore a trending threat ---
+            if threats:
+                print("\nSelect a threat type to view its latest incidents.")
+                print("Enter 0 to return to the main menu.")
+
+                while True:
+                    selection = input(
+                        f"Select an option (0-{len(threats)}): > "
+                    ).strip()
+
+                    if selection == "0":
+                        break
+
+                    if not selection.isdigit():
+                        print(
+                            f"{YELLOW}⚠️  Please enter a valid number.{RESET}"
+                        )
+                        continue
+
+                    selection = int(selection)
+
+                    if selection < 1 or selection > len(threats):
+                        print(
+                            f"{YELLOW}⚠️  Please select one of the "
+                            f"listed threat types.{RESET}"
+                        )
+                        continue
+
+                    selected_threat = threats[
+                        selection - 1
+                    ]["primary_threat_type"]
+
+
+                    # Retrieve latest incidents for selected threat type
+                    results = db.get_incidents_by_threat_type(
+                        DB_PATH,
+                        selected_threat
+                    )
+
+                    if not results:
+                        print(
+                            f"{YELLOW}⚠️  No incidents found for "
+                            f"'{selected_threat}'.{RESET}"
+                        )
+                        break
+
+                    # --- Display selectable incident list ---
+                    BACK_LABEL = "← Back to menu"
+                    PREVIEW_LEN = 70
+                    QUIT_KEYS = (ord("q"), ord("Q"), 27)
+
+                    def make_label(r):
+                        val = str(
+                            r.get("input_value", "")
+                        ).replace("\n", " ").strip()
+
+                        preview = (
+                            val[:PREVIEW_LEN] + "..."
+                            if len(val) > PREVIEW_LEN
+                            else val
+                        )
+
+                        risk = str(
+                            r.get("risk_category", "Unknown")
+                        ).upper()
+
+                        return (
+                            f"ID:{r['submission_id']} | "
+                            f"{r['input_type'][:4]} | "
+                            f"{risk:8} | "
+                            f"\"{preview}\""
+                        )
+
+                    while True:
+                        options = [BACK_LABEL] + [
+                            make_label(r) for r in results
+                        ]
+
+                        title = (
+                            f"📈 {selected_threat.upper()} INCIDENTS"
+                            "  —  ↑↓ navigate   Enter open   "
+                            "q / Esc = back"
+                        )
+
+                        selected_label, idx = pick(
+                            options,
+                            title,
+                            indicator="▶",
+                            default_index=1,
+                            quit_keys=QUIT_KEYS
+                        )
+
+                        # User selected Back, q, Q or Esc
+                        if selected_label is None or idx < 1:
+                            break
+
+                        selected_r = results[idx - 1]
+
+                        report = db.get_submission_report(
+                            DB_PATH,
+                            selected_r["submission_id"]
+                        )
+
+                        if report:
+                            print(
+                                f"\n{CYAN}"
+                                f"{'=' * BANNER_WIDTH}"
+                                f"{RESET}"
+                            )
+
+                            print(
+                                f"{BOLD}FULL INCIDENT REPORT "
+                                f"(ID: "
+                                f"{selected_r['submission_id']})"
+                                f"{RESET}"
+                            )
+
+                            print(
+                                f"{CYAN}"
+                                f"{'=' * BANNER_WIDTH}"
+                                f"{RESET}"
+                            )
+
+                            for k, v in report.items():
+                                if v is not None and v != "":
+                                    label = (
+                                        str(k)
+                                        .replace("_", " ")
+                                        .title()
+                                    )
+
+                                    print(
+                                        f"{BOLD}{label}:{RESET} {v}"
+                                    )
+
+                            print(
+                                f"{CYAN}"
+                                f"{'=' * BANNER_WIDTH}"
+                                f"{RESET}"
+                            )
+
+                            input(
+                                "\nPress Enter to return "
+                                "to results list..."
+                            )
+
+                        else:
+                            print(
+                                f"{YELLOW}⚠️  No report found "
+                                f"for that ID.{RESET}"
+                            )
+
+                            input(
+                                "\nPress Enter to continue..."
+                            )
+
+                    # Finished exploring selected threat
+                    break
+
             print()
+
             # loops back to menu for option 5
 
         # --- Option 6: Emerging Threat & Scam Radar ---

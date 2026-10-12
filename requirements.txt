@@ -4,3 +4,7 @@ python-dotenv
 requests
 pick
 google-genai
+colorama
+tabulate
+matplotlib
+windows-curses; sys_platform == "win32"

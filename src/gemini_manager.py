@@ -44,17 +44,11 @@ def build_indicator_schema():
     return {
         "type": "object",
         "properties": {
-            "present": {
-                "type": "boolean"
-            },
-            "evidence": {
-                "type": "string"
-            }
+            "present": {"type": "boolean"},
+            "evidence": {"type": "string"}
         },
-        "required": [
-            "present",
-            "evidence"
-        ]
+        "required": ["present", "evidence"],
+        "additionalProperties": False
     }
 
 
@@ -68,59 +62,35 @@ def build_education_schema():
                 "items": {
                     "type": "object",
                     "properties": {
-                        "threat_type": {
-                            "type": "string"
-                        },
-                        "meaning": {
-                            "type": "string"
-                        },
-                        "typical_goal": {
-                            "type": "string"
-                        },
+                        "threat_type": {"type": "string"},
+                        "meaning": {"type": "string"},
+                        "typical_goal": {"type": "string"},
                         "evidence": {
                             "type": "array",
-                            "items": {
-                                "type": "string"
-                            }
+                            "items": {"type": "string"}
                         }
                     },
-                    "required": [
-                        "threat_type",
-                        "meaning",
-                        "typical_goal",
-                        "evidence"
-                    ]
+                    "required": ["threat_type", "meaning", "typical_goal", "evidence"],
+                    "additionalProperties": False
                 }
             },
-            "threat_summary": {
-                "type": "string"
-            },
-            "what_it_is": {
-                "type": "string"
-            },
+            "threat_summary": {"type": "string"},
+            "what_it_is": {"type": "string"},
             "why_dangerous": {
                 "type": "array",
-                "items": {
-                    "type": "string"
-                }
+                "items": {"type": "string"}
             },
             "preventive_steps": {
                 "type": "array",
-                "items": {
-                    "type": "string"
-                }
+                "items": {"type": "string"}
             },
             "recovery_steps": {
                 "type": "array",
-                "items": {
-                    "type": "string"
-                }
+                "items": {"type": "string"}
             },
             "limitations": {
                 "type": "array",
-                "items": {
-                    "type": "string"
-                }
+                "items": {"type": "string"}
             }
         },
         "required": [
@@ -131,9 +101,9 @@ def build_education_schema():
             "preventive_steps",
             "recovery_steps",
             "limitations"
-        ]
+        ],
+        "additionalProperties": False
     }
-
 
 def build_response_schema():
     """Create the required Gemini structured-output schema."""
@@ -422,6 +392,123 @@ def extract_response_text(response_data):
         ) from error
 
 
+def _load_groq_credentials():
+    """Load GROQ_API_KEY and GROQ_MODEL from the project .env file."""
+    env_path = Path(__file__).resolve().parent.parent / ".env"
+    load_dotenv(dotenv_path=env_path, override=True)
+    api_key = os.getenv("GROQ_API_KEY")
+    model = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+    if not api_key:
+        raise RuntimeError("GROQ_API_KEY not found in environment.")
+    return api_key, model
+
+
+def _make_groq_chat_request(
+    api_key: str,
+    model: str,
+    messages: list[dict],
+    temperature: float = 0.1,
+    response_format: dict | None = None,
+    timeout: int = 60,
+) -> dict:
+    """Low-level wrapper around the Groq chat completions endpoint."""
+    url = "https://api.groq.com/openai/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+    payload = {
+        "model": model,
+        "messages": messages,
+        "temperature": temperature,
+    }
+    if response_format:
+        payload["response_format"] = response_format
+    
+    resp = requests.post(url, headers=headers, json=payload, timeout=timeout)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def make_schema_strict(schema):
+    """Recursively enforce strict mode requirements for Groq JSON schema."""
+    if not isinstance(schema, dict):
+        return schema
+        
+    if schema.get("type") == "object":
+        schema["additionalProperties"] = False
+        
+        properties = schema.get("properties", {})
+        if properties:
+            # Ensure all defined properties are required
+            schema["required"] = list(properties.keys())
+            
+            # Recursively apply to nested objects
+            for key, prop in properties.items():
+                properties[key] = make_schema_strict(prop)
+                
+    elif schema.get("type") == "array":
+        items = schema.get("items")
+        if items:
+            schema["items"] = make_schema_strict(items)
+            
+    return schema
+
+
+def send_groq_fallback_request(prompt: str, schema: dict, response_validator, operation_name: str):
+    """Send a fallback request to the Groq API."""
+    try:
+        api_key, model_name = _load_groq_credentials()
+        
+        # 1. Convert the Gemini schema to a strict Groq schema dynamically
+        strict_schema = make_schema_strict(schema)
+        
+        json_prompt = (
+            f"{prompt}\n\n"
+            "You must return ONLY valid JSON matching this exact JSON schema:\n"
+            f"{json.dumps(strict_schema)}\n"
+            "Do NOT wrap the JSON in markdown fences or add any extra commentary."
+        )
+        messages = [{"role": "user", "content": json_prompt}]
+        
+        response_body = _make_groq_chat_request(
+            api_key=api_key,
+            model=model_name,
+            messages=messages,
+            temperature=0.1,
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "structured_output",
+                    "schema": strict_schema,
+                    "strict": True
+                }
+            },
+            timeout=60,
+        )
+        
+        raw_content = response_body["choices"][0]["message"]["content"]
+        parsed_result = json.loads(raw_content)
+        
+        return response_validator(parsed_result)
+        
+    except requests.HTTPError as http_err:
+        LOGGER.error(
+            "Groq fallback HTTP %s: %s",
+            http_err.response.status_code,
+            http_err.response.text,
+        )
+        return {"error": f"Groq fallback HTTP error: {http_err}"}
+    except Exception as exc:
+        LOGGER.exception(
+            "Groq fallback %s failed with unexpected error", operation_name
+        )
+        return {"error": f"Groq fallback failed: {str(exc)}"}
+
+
+
+
 def send_structured_gemini_request(
     prompt,
     response_schema,
@@ -535,16 +622,8 @@ def send_structured_gemini_request(
 
         except requests.exceptions.HTTPError as error:
             error_response = error.response
-            status_code = (
-                error_response.status_code
-                if error_response is not None
-                else "unknown"
-            )
-            response_text = (
-                error_response.text
-                if error_response is not None
-                else str(error)
-            )
+            status_code = error_response.status_code if error_response is not None else "unknown"
+            response_text = error_response.text if error_response is not None else str(error)
 
             LOGGER.error(
                 "Gemini %s returned HTTP %s on attempt %s: %s",
@@ -554,38 +633,15 @@ def send_structured_gemini_request(
                 response_text
             )
 
-            if (
-                status_code in {
-                    429,
-                    500,
-                    502,
-                    503,
-                    504
-                }
-                and attempt_number < MAX_API_ATTEMPTS
-            ):
-                last_error = (
-                    f"Gemini returned HTTP {status_code}."
-                )
-                wait_seconds = min(
-                    2 ** attempt_number,
-                    30
-                )
-
-                print(
-                    f"[Gemini] HTTP {status_code}. "
-                    f"Retrying in {wait_seconds} seconds..."
-                )
-
+            if status_code in {429, 500, 502, 503, 504} and attempt_number < MAX_API_ATTEMPTS:
+                last_error = f"Gemini returned HTTP {status_code}."
+                wait_seconds = min(pow(2, attempt_number), 30)
+                print(f"[Gemini] HTTP {status_code}. Retrying in {wait_seconds} seconds...")
                 time.sleep(wait_seconds)
                 continue
 
-            return {
-                "error": (
-                    f"Gemini returned HTTP {status_code}."
-                ),
-                "details": response_text
-            }
+            last_error = f"Gemini returned HTTP {status_code}."
+            break
 
         except requests.exceptions.RequestException as error:
             LOGGER.error(
@@ -627,19 +683,12 @@ def send_structured_gemini_request(
             time.sleep(wait_seconds)
 
     LOGGER.error(
-        "Gemini %s failed after %s attempts: %s",
+        "Gemini %s failed after %s attempts: %s. Attempting Groq fallback.",
         operation_name,
         MAX_API_ATTEMPTS,
         last_error
     )
-
-    return {
-        "error": (
-            f"Gemini did not return valid {operation_name} "
-            f"output after {MAX_API_ATTEMPTS} attempts."
-        ),
-        "details": last_error
-    }
+    return send_groq_fallback_request(prompt, response_schema, response_validator, operation_name)
 
 
 def validate_analysis_response(analysis):
