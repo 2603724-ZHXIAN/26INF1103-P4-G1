@@ -48,3 +48,29 @@ python -m tests.test_logic_manager
 - `docs/`: Project documentation and flowchart.
 
 Keep your local `.env` file in the main project folder.
+
+## Running with Docker
+
+From the main project folder, build the image:
+
+```bash
+docker build -f dockerfile -t cyber-threat-engine:organisation .
+```
+
+Start the application:
+
+```bash
+docker run --rm -it -e TERM=xterm cyber-threat-engine:organisation
+```
+
+Run the offline tests:
+
+```bash
+docker run --rm cyber-threat-engine:organisation python -m tests.test_logic_manager
+```
+
+For live API features, add `--env-file .env` to the application command.
+The `.env` file stays on your computer and is excluded from the image.
+
+Database changes inside these temporary containers are discarded when
+the containers exit.
