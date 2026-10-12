@@ -3,3 +3,4 @@ jsonschema
 python-dotenv
 requests
 pick
+google-genai

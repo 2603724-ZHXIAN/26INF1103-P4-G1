@@ -147,3 +147,7 @@ Traceback (most recent call last):
     elif sub_choice == "3":
          ^^^^^^^^^^
 UnboundLocalError: cannot access local variable 'sub_choice' where it is not associated with a value
+2026-10-08 22:16:16,408 | ERROR | gemini_manager | Gemini configuration error for text analysis: GEMINI_API_KEY was not found in C:\Users\Yapsam\Downloads\Prog Fundamentals with Devops INF1103\Prog_Fund_Assignment\.env
+2026-10-08 22:16:16,411 | ERROR | root | Gemini analysis failed for submission 85: GEMINI_API_KEY was not found in C:\Users\Yapsam\Downloads\Prog Fundamentals with Devops INF1103\Prog_Fund_Assignment\.env
+2026-10-08 22:32:20,696 | INFO | root | Text analysis for submission 87 was saved successfully
+2026-10-08 22:32:56,970 | INFO | root | Text analysis for submission 88 was saved successfully

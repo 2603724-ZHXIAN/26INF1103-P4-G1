@@ -829,6 +829,47 @@ def display_submission_outcome(
     )
 
 
+def display_threat_radar(radar_result, topic=None):
+    """Display the clean, formatted emerging threat radar analysis."""
+    banner_width = 72
+    scope = f"'{topic}'" if topic else "Top Emerging Threats (Current Active Trends)"
+    model_name = radar_result.get("model_name", "Gemini AI")
+
+    print("\n" + "=" * banner_width)
+    print("🌐 EMERGING THREAT & SCAM RADAR: LIVE WEB GROUNDING")
+    print("=" * banner_width)
+    print(f"Target Scope   : {scope}")
+    print(f"AI Engine      : {model_name} + Google Search Grounding")
+    print("=" * banner_width)
+
+    content = radar_result.get("content", "").strip()
+    if content:
+        print(f"\n{content}\n")
+    else:
+        print("\nNo threat intelligence content was returned.")
+
+    sources = radar_result.get("sources", [])
+    if sources:
+        print("-" * banner_width)
+        print("🔗 VERIFIED GROUNDING SOURCES")
+        print("-" * banner_width)
+        for idx, src in enumerate(sources[:8], 1):
+            title = src.get("title") or "Security Advisory"
+            url = src.get("url", "")
+            print(f"[{idx}] {title}")
+            if url:
+                print(f"    {url}")
+
+    queries = radar_result.get("search_queries", [])
+    if queries:
+        print("\n🔍 Live Search Queries Grounded:")
+        for q in queries:
+            print(f"  • {q}")
+
+    print("=" * banner_width)
+    input("\nPress Enter to return to the main menu...")
+
+
 def process_request(request_data):
     """Route the returned input-manager request."""
     if request_data is None:
@@ -842,6 +883,29 @@ def process_request(request_data):
             "Detection Engine. Stay alert and stay secure."
         )
         return False
+
+    if action == "emerging_threat_radar":
+        topic = request_data.get("topic")
+        target_desc = f"'{topic}'" if topic else "top active scam campaigns"
+        print(
+            f"\n[Threat Radar] Querying live Google Search grounding "
+            f"for {target_desc} via Gemini..."
+        )
+        radar_result = gemini.fetch_emerging_threat_radar(topic=topic)
+
+        if not isinstance(radar_result, dict):
+            print("\n[Threat Radar] Received an invalid response from Gemini.")
+            return True
+
+        if "error" in radar_result:
+            print(f"\n[Threat Radar] Query failed: {radar_result['error']}")
+            if radar_result.get("details"):
+                print(f"Details: {radar_result['details']}")
+            input("\nPress Enter to return to the main menu...")
+            return True
+
+        display_threat_radar(radar_result, topic)
+        return True
 
     if action == "analyze_submission":
         try:
