@@ -1,7 +1,9 @@
 import hashlib
 import os
 import subprocess
-import sys
+import hashlib
+import curses
+import locale
 
 
 try:
@@ -35,6 +37,92 @@ IO_TAG = f"{BLUE}[I/O Manager]{RESET}"
 def generate_hash(value):
     """Return the SHA-256 hex digest of a string."""
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def browse_results(results, title="HISTORICAL INCIDENT RESULTS"):
+    """Show results in a coloured, scrollable table.
+    Returns the index of the chosen result, or None if the user quits."""
+    locale.setlocale(locale.LC_ALL, "")
+    os.environ.setdefault("ESCDELAY", "25")  # make Esc respond instantly
+
+    def run(stdscr):
+        curses.curs_set(0)
+        curses.use_default_colors()
+        for i, c in enumerate(
+            (curses.COLOR_CYAN, curses.COLOR_GREEN, curses.COLOR_YELLOW, curses.COLOR_RED), 1
+        ):
+            curses.init_pair(i, c, -1)
+        cyan, green, yellow, red = (curses.color_pair(i) for i in (1, 2, 3, 4))
+        risk_colors = {"high": red, "moderate": yellow, "medium": yellow, "low": green}
+
+        def put(y, x, text, attr=0):
+            h, w = stdscr.getmaxyx()
+            if 0 <= y < h and x < w - 1:
+                try:
+                    stdscr.addstr(y, x, text[: w - 1 - x], attr)
+                except curses.error:
+                    pass
+
+        pos = top = 0
+        while True:
+            stdscr.erase()
+            h, w = stdscr.getmaxyx()
+            visible = max(1, h - 6)
+            preview_w = max(10, w - 34)
+
+            # Title + header
+            put(0, 0, title.center(w - 1), cyan | curses.A_BOLD)
+            put(1, 0, "═" * (w - 1), cyan)
+            put(2, 0, f"  {'ID':<5}│ {'Type':<5}│ {'Risk':<9}│ Preview", curses.A_BOLD)
+            put(3, 0, "─" * (w - 1), cyan)
+
+            # Keep the cursor inside the visible window
+            if pos < top:
+                top = pos
+            elif pos >= top + visible:
+                top = pos - visible + 1
+
+            # Rows
+            for row, r in enumerate(results[top: top + visible]):
+                i = top + row
+                val = str(r.get("input_value", "")).replace("\n", " ").strip()
+                preview = val if len(val) <= preview_w else val[: preview_w - 3] + "..."
+                risk = str(r.get("risk_category", "Unknown")).lower()
+                line_a = f"{r['submission_id']:<5}│ {str(r['input_type']):<5}│ "
+                y = 4 + row
+
+                if i == pos:  # highlighted row: all green + bold
+                    attr = green | curses.A_BOLD
+                    put(y, 0, "▶ " + line_a + f"{risk.upper():<9}│ {preview}", attr)
+                else:
+                    put(y, 0, "  " + line_a)
+                    put(y, 2 + len(line_a), f"{risk.upper():<9}", risk_colors.get(risk, 0) | curses.A_BOLD)
+                    put(y, 2 + len(line_a) + 9, f"│ {preview}")
+
+            # Footer
+            put(h - 2, 0, "─" * (w - 1), cyan)
+            put(h - 1, 0, f" ↑↓ move   Enter open   q/Esc back   [{pos + 1}/{len(results)}]", curses.A_DIM)
+            stdscr.refresh()
+
+            key = stdscr.getch()
+            if key in (curses.KEY_UP, ord("k")):
+                pos = max(0, pos - 1)
+            elif key in (curses.KEY_DOWN, ord("j")):
+                pos = min(len(results) - 1, pos + 1)
+            elif key == curses.KEY_PPAGE:
+                pos = max(0, pos - visible)
+            elif key == curses.KEY_NPAGE:
+                pos = min(len(results) - 1, pos + visible)
+            elif key == curses.KEY_HOME:
+                pos = 0
+            elif key == curses.KEY_END:
+                pos = len(results) - 1
+            elif key in (10, 13, curses.KEY_ENTER):
+                return pos
+            elif key in (ord("q"), ord("Q"), 27):
+                return None
+
+    return curses.wrapper(run)
 
 
 def collect_user_interaction():
@@ -352,35 +440,27 @@ def collect_user_request():
                 print(f"{IO_TAG} 🛠️  Returning to main menu.")
 
             if results:
-                for r in results:
-                    print(format_result(r))
+                while True:
+                    idx = browse_results(results)
+                    if idx is None:
+                        break
 
-                print()
-                view_id = input(
-                    "Enter an ID to view full details "
-                    "(or press Enter to go back): > "
-                ).strip()
-                if view_id.isdigit():
-                    report = db.get_submission_report(DB_PATH, int(view_id))
+                    selected_r = results[idx]
+                    report = db.get_submission_report(DB_PATH, selected_r["submission_id"])
                     if report:
-                        rule = f"{CYAN}{'=' * BANNER_WIDTH}{RESET}"
-                        print(f"\n{rule}")
-                        print(
-                            f"{BOLD}FULL INCIDENT REPORT "
-                            f"(ID: {view_id}){RESET}"
-                        )
-                        print(rule)
+                        print(f"\n{CYAN}{'='*BANNER_WIDTH}{RESET}")
+                        print(f"{BOLD}FULL INCIDENT REPORT (ID: {selected_r['submission_id']}){RESET}")
+                        print(f"{CYAN}{'='*BANNER_WIDTH}{RESET}")
                         for k, v in report.items():
                             if v is not None and v != "":
                                 label = str(k).replace("_", " ").title()
                                 print(f"{BOLD}{label}:{RESET} {v}")
-                        print(rule)
-                        input("\nPress Enter to return to menu...")
+                        print(f"{CYAN}{'='*BANNER_WIDTH}{RESET}")
+                        input("\nPress Enter to return to results list...")
                     else:
-                        print(
-                            f"  {YELLOW}⚠️  No report found for ID "
-                            f"{view_id}.{RESET}"
-                        )
+                        print(f"  {YELLOW}⚠️  No report found for that ID.{RESET}")
+                        input("\nPress Enter to continue...")
+
 
         # --- Option 5: Common Threat Summaries (Low/Moderate/High) ---
         elif choice == "5":
