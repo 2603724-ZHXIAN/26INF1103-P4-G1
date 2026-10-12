@@ -44,17 +44,11 @@ def build_indicator_schema():
     return {
         "type": "object",
         "properties": {
-            "present": {
-                "type": "boolean"
-            },
-            "evidence": {
-                "type": "string"
-            }
+            "present": {"type": "boolean"},
+            "evidence": {"type": "string"}
         },
-        "required": [
-            "present",
-            "evidence"
-        ]
+        "required": ["present", "evidence"],
+        "additionalProperties": False
     }
 
 
@@ -68,59 +62,35 @@ def build_education_schema():
                 "items": {
                     "type": "object",
                     "properties": {
-                        "threat_type": {
-                            "type": "string"
-                        },
-                        "meaning": {
-                            "type": "string"
-                        },
-                        "typical_goal": {
-                            "type": "string"
-                        },
+                        "threat_type": {"type": "string"},
+                        "meaning": {"type": "string"},
+                        "typical_goal": {"type": "string"},
                         "evidence": {
                             "type": "array",
-                            "items": {
-                                "type": "string"
-                            }
+                            "items": {"type": "string"}
                         }
                     },
-                    "required": [
-                        "threat_type",
-                        "meaning",
-                        "typical_goal",
-                        "evidence"
-                    ]
+                    "required": ["threat_type", "meaning", "typical_goal", "evidence"],
+                    "additionalProperties": False
                 }
             },
-            "threat_summary": {
-                "type": "string"
-            },
-            "what_it_is": {
-                "type": "string"
-            },
+            "threat_summary": {"type": "string"},
+            "what_it_is": {"type": "string"},
             "why_dangerous": {
                 "type": "array",
-                "items": {
-                    "type": "string"
-                }
+                "items": {"type": "string"}
             },
             "preventive_steps": {
                 "type": "array",
-                "items": {
-                    "type": "string"
-                }
+                "items": {"type": "string"}
             },
             "recovery_steps": {
                 "type": "array",
-                "items": {
-                    "type": "string"
-                }
+                "items": {"type": "string"}
             },
             "limitations": {
                 "type": "array",
-                "items": {
-                    "type": "string"
-                }
+                "items": {"type": "string"}
             }
         },
         "required": [
@@ -131,9 +101,9 @@ def build_education_schema():
             "preventive_steps",
             "recovery_steps",
             "limitations"
-        ]
+        ],
+        "additionalProperties": False
     }
-
 
 def build_response_schema():
     """Create the required Gemini structured-output schema."""
@@ -461,14 +431,43 @@ def _make_groq_chat_request(
     return resp.json()
 
 
-def send_groq_fallback_request(prompt: str, response_validator, operation_name: str):
+def make_schema_strict(schema):
+    """Recursively enforce strict mode requirements for Groq JSON schema."""
+    if not isinstance(schema, dict):
+        return schema
+        
+    if schema.get("type") == "object":
+        schema["additionalProperties"] = False
+        
+        properties = schema.get("properties", {})
+        if properties:
+            # Ensure all defined properties are required
+            schema["required"] = list(properties.keys())
+            
+            # Recursively apply to nested objects
+            for key, prop in properties.items():
+                properties[key] = make_schema_strict(prop)
+                
+    elif schema.get("type") == "array":
+        items = schema.get("items")
+        if items:
+            schema["items"] = make_schema_strict(items)
+            
+    return schema
+
+
+def send_groq_fallback_request(prompt: str, schema: dict, response_validator, operation_name: str):
     """Send a fallback request to the Groq API."""
     try:
         api_key, model_name = _load_groq_credentials()
+        
+        # 1. Convert the Gemini schema to a strict Groq schema dynamically
+        strict_schema = make_schema_strict(schema)
+        
         json_prompt = (
             f"{prompt}\n\n"
-            "You must return ONLY valid JSON matching the schema that was "
-            "provided to you. You must use the exact indicator property names specified in the schema. "
+            "You must return ONLY valid JSON matching this exact JSON schema:\n"
+            f"{json.dumps(strict_schema)}\n"
             "Do NOT wrap the JSON in markdown fences or add any extra commentary."
         )
         messages = [{"role": "user", "content": json_prompt}]
@@ -478,82 +477,20 @@ def send_groq_fallback_request(prompt: str, response_validator, operation_name: 
             model=model_name,
             messages=messages,
             temperature=0.1,
-            response_format={"type": "json_object"},
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "structured_output",
+                    "schema": strict_schema,
+                    "strict": True
+                }
+            },
             timeout=60,
         )
         
         raw_content = response_body["choices"][0]["message"]["content"]
         parsed_result = json.loads(raw_content)
         
-        defaults = {
-            "message_classification": "uncertain",
-            "primary_threat_type": "none",
-            "analysis_confidence": "low",
-            "language": "english",
-            "message_type": "unknown",
-            "claimed_entity": "",
-            "requested_actions": [],
-            "possible_intents": [],
-            "extracted_urls": [],
-            "extracted_contacts": [],
-            "suspected_threat_types": [],
-            "indicators": {
-                "urgency_pressure": {"present": False, "evidence": ""},
-                "authority_impersonation": {"present": False, "evidence": ""},
-                "credential_request": {"present": False, "evidence": ""},
-                "personal_information_request": {"present": False, "evidence": ""},
-                "payment_request": {"present": False, "evidence": ""},
-                "otp_request": {"present": False, "evidence": ""},
-                "suspicious_link": {"present": False, "evidence": ""},
-                "download_request": {"present": False, "evidence": ""},
-                "threatening_language": {"present": False, "evidence": ""},
-                "reward_or_prize": {"present": False, "evidence": ""}
-            },
-            "other_warning_signs": [],
-            "user_exposure": {
-                "clicked_or_opened_link": False,
-                "entered_credentials": False,
-                "shared_personal_information": False,
-                "downloaded_or_opened_file": False,
-                "shared_otp": False,
-                "made_payment": False,
-                "shared_banking_details": False,
-                "installed_software": False,
-                "granted_remote_access": False,
-                "description_summary": ""
-            },
-            "education": {
-                "threat_explanations": [],
-                "threat_summary": "",
-                "what_it_is": "",
-                "why_dangerous": [],
-                "preventive_steps": [],
-                "recovery_steps": [],
-                "limitations": []
-            }
-        }
-        
-        for key, default_value in defaults.items():
-            if key not in parsed_result:
-                parsed_result[key] = default_value
-                
-        if "indicators" in parsed_result and isinstance(parsed_result["indicators"], dict):
-            ind = parsed_result["indicators"]
-            mapping = {
-                "urgency": "urgency_pressure",
-                "link": "suspicious_link",
-                "financial_threat": "payment_request",
-                "impersonation": "authority_impersonation",
-                "social_engineering": "suspicious_link"
-            }
-            for old_key, new_key in mapping.items():
-                if old_key in ind and new_key not in ind:
-                    ind[new_key] = ind.pop(old_key)
-            
-            for req_ind in defaults["indicators"]:
-                if req_ind not in ind:
-                    ind[req_ind] = {"present": False, "evidence": ""}
-                    
         return response_validator(parsed_result)
         
     except requests.HTTPError as http_err:
@@ -568,6 +505,8 @@ def send_groq_fallback_request(prompt: str, response_validator, operation_name: 
             "Groq fallback %s failed with unexpected error", operation_name
         )
         return {"error": f"Groq fallback failed: {str(exc)}"}
+
+
 
 
 def send_structured_gemini_request(
@@ -749,7 +688,7 @@ def send_structured_gemini_request(
         MAX_API_ATTEMPTS,
         last_error
     )
-    return send_groq_fallback_request(prompt, response_validator, operation_name)
+    return send_groq_fallback_request(prompt, response_schema, response_validator, operation_name)
 
 
 def validate_analysis_response(analysis):

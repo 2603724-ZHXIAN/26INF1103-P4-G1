@@ -4,7 +4,7 @@ import subprocess
 import hashlib
 import curses
 import locale
-
+import sys
 
 try:
     import validators
