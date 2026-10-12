@@ -688,6 +688,7 @@ def send_structured_gemini_request(
         MAX_API_ATTEMPTS,
         last_error
     )
+    print("[Education] Gemini failed and will now try Groq API.")
     return send_groq_fallback_request(prompt, response_schema, response_validator, operation_name)
 
 
