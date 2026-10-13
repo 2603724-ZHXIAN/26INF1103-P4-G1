@@ -12,7 +12,7 @@ Create `.env` file to be filled with own API Keys
 # GEMINI_MODEL=gemini-3.8-flash
 # VT_API_KEY=your_virustotal_api_key_here
 # GROQ_API_KEY=your_groq_api_key_here
-# GROQ_MODEL="openai/gpt-oss-120b"
+# GROQ_MODEL=openai/gpt-oss-120b
 
 ===============================================================
 
@@ -60,7 +60,7 @@ docker build -f dockerfile -t cyber-threat-engine:organisation .
 Start the application:
 
 ```bash
-docker run --rm -it -e TERM=xterm cyber-threat-engine:organisation
+docker run --rm -it -e TERM=xterm --env-file .env cyber-threat-engine:organisation
 ```
 
 Run the offline tests:
