@@ -518,16 +518,8 @@ def send_structured_gemini_request(
     """Send one structured Gemini request with shared error handling."""
     try:
         api_key, model_name = load_gemini_config()
-    except ValueError as error:
-        LOGGER.error(
-            "Gemini configuration error for %s: %s",
-            operation_name,
-            error
-        )
-
-        return {
-            "error": str(error)
-        }
+    except ValueError:
+        return send_groq_fallback_request(prompt, response_schema, response_validator, operation_name)
 
     endpoint = (
         "https://generativelanguage.googleapis.com/"
