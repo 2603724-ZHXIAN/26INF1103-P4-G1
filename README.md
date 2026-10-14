@@ -60,7 +60,7 @@ docker build -f dockerfile -t cyber-threat-engine:organisation .
 Start the application:
 
 ```bash
-docker run --rm -it -e TERM=xterm --env-file .env cyber-threat-engine:organisation
+docker run --rm -it ` --mount "type=bind,source=$($PWD.Path)\.env,target=/app/.env,readonly" ` cyber-threat-engine:organisation
 ```
 
 Run the offline tests:
