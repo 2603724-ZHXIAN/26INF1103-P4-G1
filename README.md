@@ -51,26 +51,55 @@ Keep your local `.env` file in the main project folder.
 
 ## Running with Docker
 
-From the main project folder, build the image:
+These commands are for Windows PowerShell. Start Docker Desktop and run them from the main project folder.
 
-```bash
+### 1. Prepare files for analysis
+
+Create a folder named `test_files` in the main project folder:
+
+```powershell
+New-Item -ItemType Directory -Force test_files
+```
+
+Place any files you want to analyse inside this folder.
+
+### 2. Build the image
+
+```powershell
 docker build -f dockerfile -t cyber-threat-engine:organisation .
 ```
 
-Start the application:
+### 3. Start the application
 
-```bash
-docker run --rm -it ` --mount "type=bind,source=$($PWD.Path)\.env,target=/app/.env,readonly" ` cyber-threat-engine:organisation
+Ensure your `.env` file is in the main project folder.
+
+```powershell
+docker run --rm -it `
+  --mount "type=bind,source=$($PWD.Path)\.env,target=/app/.env,readonly" `
+  --mount "type=bind,source=$($PWD.Path)\test_files,target=/files,readonly" `
+  cyber-threat-engine:organisation
 ```
 
-Run the offline tests:
+Each backtick must be the last character on its line, with no trailing spaces.
 
-```bash
+The `.env` file supplies your API keys. It stays on your computer and is excluded from the image. No additional `--env-file` flag is needed.
+
+### 4. Analyse a file using option [3]
+
+Select option [3] and enter the container file path, for example:
+
+```text
+/files/safe_test_file.txt
+```
+
+Replace `safe_test_file.txt` with the name of a file inside `test_files`.
+
+When running in Docker, use `/files/...` instead of a Windows path such as `C:\Users\...\Downloads\...`.
+
+### 5. Run the offline tests
+
+```powershell
 docker run --rm cyber-threat-engine:organisation python -m tests.test_logic_manager
 ```
 
-For live API features, add `--env-file .env` to the application command.
-The `.env` file stays on your computer and is excluded from the image.
-
-Database changes inside these temporary containers are discarded when
-the containers exit.
+Database changes inside these temporary containers are discarded when the containers exit.
