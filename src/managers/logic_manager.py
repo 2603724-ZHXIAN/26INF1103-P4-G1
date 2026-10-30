@@ -4,6 +4,8 @@ Encapsulated rules, evidence validation, text rules and exposure routing.
 No API, database, file or presentation operations belong in this class.
 """
 
+from typing import Optional
+
 from ..models import AssessmentResult, Submission
 
 
@@ -381,3 +383,55 @@ class LogicManager:
                 f"The VirusTotal reputation value is {reputation}.",
             ],
         }
+
+    def evaluate_technical_threat(
+        self,
+        submission: Submission,
+        vt_data: dict,
+        interpreted_exposure: Optional[dict] = None,
+    ) -> AssessmentResult:
+        """Evaluate parsed URL/file findings without calling a scanning service."""
+        self._validate_submission(submission, {"url", "file"})
+        if submission.interaction_type == "other" and interpreted_exposure is not None:
+            if not isinstance(interpreted_exposure, dict):
+                raise ValueError("Interpreted exposure must be a dictionary or None.")
+            for name in self._high_exposure_fields | self._medium_exposure_fields:
+                if name in interpreted_exposure and not isinstance(interpreted_exposure[name], bool):
+                    raise ValueError("Interpreted exposure flags must be booleans.")
+        technical = self._evaluate_technical_evidence(vt_data)
+        source_risk = technical["technical_risk"]
+        exposure = self._determine_user_exposure(
+            submission.interaction_type, interpreted_exposure
+        )
+        # Preserve the existing technical pipeline's medium placeholder for
+        # uninterpreted Other actions, with an explicit explanation below.
+        exposure_level = exposure["level"]
+        if exposure_level == "unknown":
+            exposure_level = "medium"
+            exposure["reason"] += " Exposure is unconfirmed; medium is used as the model-compatible placeholder."
+        overall_risk = self._determine_overall_risk(source_risk, exposure_level)
+        route = self._determine_route(
+            overall_risk, submission.interaction_type,
+            interpreted_exposure or {}, [], source_risk
+        )
+        result = {
+            "is_scam": source_risk == "high",
+            "risk_score": None,
+            "risk_category": overall_risk,
+            "message_risk": source_risk,
+            "exposure_level": exposure_level,
+            "overall_risk": overall_risk,
+            "decision": route["decision"],
+            "route": route["route"],
+            "priority": route["priority"],
+            "recommended_action": route["recommended_action"],
+            "flags": technical["flags"],
+            "active_indicators": list(technical["flags"]),
+            "risk_reasons": technical["risk_reasons"] + [exposure["reason"]],
+            "matched_rules": [{"rule": "virustotal_engine_threshold", "risk_level": source_risk}],
+            "matched_exposures": exposure["matched_exposures"],
+            "exposure_reason": exposure["reason"],
+        }
+        assessment = self._to_assessment(result)
+        submission.set_assessment(assessment)
+        return assessment

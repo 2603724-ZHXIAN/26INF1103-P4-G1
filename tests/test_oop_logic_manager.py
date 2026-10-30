@@ -465,5 +465,92 @@ class LogicManagerTechnicalEvidenceTests(unittest.TestCase):
                     self.manager._evaluate_technical_evidence(data)
 
 
+class LogicManagerTechnicalAssessmentTests(unittest.TestCase):
+    def setUp(self):
+        self.manager = LogicManager()
+
+    def test_both_resource_types_and_all_six_user_actions(self):
+        actions = [
+            ("viewed_only", None, "low", "medium", "verification_guidance"),
+            ("clicked_link", None, "medium", "medium", "verification_guidance"),
+            ("entered_information", None, "high", "high", "account_security_response"),
+            ("opened_or_downloaded_file", None, "high", "high", "device_security_response"),
+            ("made_payment_or_shared_banking_details", None, "high", "high", "urgent_financial_response"),
+            ("other", {"shared_otp": True}, "high", "high", "urgent_financial_response"),
+        ]
+        for kind in ("url", "file"):
+            for action, exposure, level, overall, route in actions:
+                with self.subTest(kind=kind, action=action):
+                    sub = Submission(kind, "example.test" if kind == "url" else "sample.pdf", action)
+                    result = self.manager.evaluate_technical_threat(sub, make_vt(suspicious=2), exposure)
+                    self.assertIsInstance(result, AssessmentResult)
+                    self.assertIs(sub.assessment, result)
+                    self.assertEqual(result.message_risk, "medium")
+                    self.assertEqual(result.exposure_level, level)
+                    self.assertEqual(result.overall_risk, overall)
+                    self.assertEqual(result.route, route)
+                    self.assertEqual(result.recovery_steps, [result.recommended_action])
+
+    def test_high_technical_risk_is_not_lowered_by_viewing_only(self):
+        sub = Submission("file", "suspicious.exe", submission_id=21)
+        data = make_vt(malicious=5)
+        data["threat_names"] = ["trojan"]
+        result = self.manager.evaluate_technical_threat(sub, data)
+        self.assertEqual(result.overall_risk, "high")
+        self.assertTrue(result.is_scam)
+        self.assertEqual(result.flags, ["trojan"])
+        self.assertEqual(result.submission_id, 21)
+        self.assertIsNone(result.risk_score)
+        self.assertIn("5 engine(s)", result.risk_reasons[0])
+        self.assertEqual(sub.processing_status, "pending")
+
+    def test_low_technical_risk_with_payment_preserves_existing_rule(self):
+        result = self.manager.evaluate_technical_threat(
+            Submission("url", "example.test", "made_payment_or_shared_banking_details"), make_vt()
+        )
+        self.assertEqual(result.overall_risk, "low")
+        self.assertEqual(result.exposure_level, "high")
+        self.assertEqual(result.route, "general_safety_education")
+
+    def test_other_without_interpretation_has_explicit_unknown_explanation(self):
+        result = self.manager.evaluate_technical_threat(Submission("url", "example.test", "other"), make_vt(suspicious=2))
+        self.assertEqual(result.exposure_level, "medium")
+        self.assertIn("unconfirmed", result.exposure_reason)
+
+    def test_invalid_evidence_preserves_prior_assessment(self):
+        sub = Submission("url", "example.test")
+        prior = self.manager.evaluate_technical_threat(sub, make_vt())
+        for data in ({"error": "Unavailable"}, make_vt(undetected=0, timeout=10), make_vt(malicious=-1)):
+            with self.subTest(data=data), self.assertRaises(ValueError):
+                try:
+                    self.manager.evaluate_technical_threat(sub, data)
+                finally:
+                    self.assertIs(sub.assessment, prior)
+
+    def test_text_submission_is_rejected_by_technical_pipeline(self):
+        sub = Submission("text", "Hello")
+        with self.assertRaises(ValueError):
+            self.manager.evaluate_technical_threat(sub, make_vt())
+        self.assertIsNone(sub.assessment)
+
+    def test_custom_exposure_requires_valid_boolean_flags(self):
+        for exposure in ("clicked", {"shared_otp": "false"}):
+            with self.subTest(exposure=exposure), self.assertRaises(ValueError):
+                self.manager.evaluate_technical_threat(Submission("url", "example.test", "other"), make_vt(), exposure)
+
+    def test_input_findings_and_exposure_are_not_modified(self):
+        data = make_vt(malicious=5)
+        exposure = {"granted_remote_access": True}
+        before = copy.deepcopy((data, exposure))
+        self.manager.evaluate_technical_threat(Submission("file", "sample.exe", "other"), data, exposure)
+        self.assertEqual((data, exposure), before)
+
+    def test_domain_result_serialization_preserves_reasons_and_routes(self):
+        sub = Submission("url", "example.test", "entered_information")
+        result = self.manager.evaluate_technical_threat(sub, make_vt(malicious=5))
+        restored = Submission.from_dict(sub.to_dict())
+        self.assertEqual(restored.assessment.to_dict(), result.to_dict())
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
