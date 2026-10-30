@@ -227,13 +227,27 @@ class AssessmentResult:
     def recovery_steps(self) -> List[str]:
         return list(self._recovery_steps)
 
+    @recovery_steps.setter
+    def recovery_steps(self, value: List[str]) -> None:
+        if not isinstance(value, list):
+            raise TypeError("recovery_steps must be a list of strings.")
+        self._recovery_steps = [str(s).strip() for s in value]
+
     @property
     def threat_summary(self) -> str:
         return self._threat_summary
 
+    @threat_summary.setter
+    def threat_summary(self, value: str) -> None:
+        self._threat_summary = str(value).strip() if value else ""
+
     @property
     def what_it_is(self) -> str:
         return self._what_it_is
+
+    @what_it_is.setter
+    def what_it_is(self, value: str) -> None:
+        self._what_it_is = str(value).strip() if value else ""
 
     @property
     def created_at(self) -> str:
@@ -242,6 +256,20 @@ class AssessmentResult:
     # -------------------------------------------------------------------------
     # Domain & Helper Methods
     # -------------------------------------------------------------------------
+
+    def attach_educational_guidance(
+        self,
+        what_it_is: Optional[str] = None,
+        threat_summary: Optional[str] = None,
+        recovery_steps: Optional[List[str]] = None,
+    ) -> None:
+        """Attach AI educational insights to this assessment (Encapsulation)."""
+        if what_it_is is not None:
+            self.what_it_is = what_it_is
+        if threat_summary is not None:
+            self.threat_summary = threat_summary
+        if recovery_steps is not None:
+            self.recovery_steps = recovery_steps
 
     def is_high_risk(self) -> bool:
         """Return True if overall risk or risk category is high."""
