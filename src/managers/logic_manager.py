@@ -1,6 +1,6 @@
 """Deterministic threat rules using domain models.
 
-Stage 1: encapsulated rule configuration and evidence validation.
+Encapsulated rules, evidence validation, text rules and exposure routing.
 No API, database, file or presentation operations belong in this class.
 """
 
@@ -168,3 +168,75 @@ class LogicManager:
         if fallback['flag']:
             flags.append(fallback['flag'])
         return {'level': fallback['level'], 'flags': flags, 'reasons': [fallback['reason']], 'matched_rules': [], 'unknown_warning_signs': unknown_warning_signs}
+
+    def _validate_user_exposure(self, user_exposure):
+        """Return a safe user-exposure dictionary."""
+        if not isinstance(user_exposure, dict):
+            return {}
+        validated_exposure = {}
+        exposure_fields = self._high_exposure_fields | self._medium_exposure_fields
+        for field_name in exposure_fields:
+            value = user_exposure.get(field_name, False)
+            validated_exposure[field_name] = value is True
+        return validated_exposure
+
+    def _determine_other_exposure(self, user_exposure):
+        """Determine exposure from a custom Other description."""
+        validated_exposure = self._validate_user_exposure(user_exposure)
+        matched_exposures = [field_name for field_name in sorted(self._high_exposure_fields) if validated_exposure.get(field_name) is True]
+        if matched_exposures:
+            return {'level': 'high', 'matched_exposures': matched_exposures, 'reason': 'The custom description indicates that the user shared sensitive information or exposed an account, payment method or device.'}
+        matched_exposures = [field_name for field_name in sorted(self._medium_exposure_fields) if validated_exposure.get(field_name) is True]
+        if matched_exposures:
+            return {'level': 'medium', 'matched_exposures': matched_exposures, 'reason': 'The custom description indicates that the user clicked or opened a link.'}
+        return {'level': 'low', 'matched_exposures': [], 'reason': 'The custom description does not indicate a known sensitive action.'}
+
+    def _determine_user_exposure(self, interaction_type, user_exposure):
+        """Determine exposure from the authoritative user selection."""
+        if interaction_type == 'other':
+            if user_exposure is None:
+                return {'level': 'unknown', 'matched_exposures': [], 'reason': 'The custom interaction could not be interpreted reliably.'}
+            return self._determine_other_exposure(user_exposure)
+        level = self._interaction_levels.get(interaction_type)
+        if level is None:
+            return {'level': 'unknown', 'matched_exposures': [], 'reason': 'The interaction type was not recognised.'}
+        descriptions = {'viewed_only': 'The user viewed the item without taking another reported action.', 'clicked_link': 'The user clicked a link but did not report entering information.', 'entered_information': 'The user entered personal or login information.', 'opened_or_downloaded_file': 'The user opened or downloaded a file.', 'made_payment_or_shared_banking_details': 'The user made a payment or shared banking details.'}
+        return {'level': level, 'matched_exposures': [interaction_type], 'reason': descriptions[interaction_type]}
+
+    def _determine_overall_risk(self, message_level, exposure_level):
+        """Combine technical/message risk and user exposure."""
+        if exposure_level == 'unknown':
+            if message_level in {'low', 'medium', 'high'}:
+                return message_level
+            return 'medium'
+        return self._risk_matrix.get((message_level, exposure_level), 'medium')
+
+    def _has_critical_exposure(self, interaction_type, user_exposure):
+        """Return whether the user performed a critical action."""
+        if interaction_type == 'made_payment_or_shared_banking_details':
+            return True
+        if interaction_type != 'other':
+            return False
+        validated_exposure = self._validate_user_exposure(user_exposure)
+        return any((validated_exposure.get(field_name) is True for field_name in self._critical_exposure_fields))
+
+    def _determine_route(self, overall_risk, interaction_type, user_exposure, unknown_warning_signs, source_risk_level):
+        """Decide the response route and priority."""
+        validated_exposure = self._validate_user_exposure(user_exposure)
+        financial_exposure = interaction_type == 'made_payment_or_shared_banking_details' or (interaction_type == 'other' and (validated_exposure.get('shared_otp') is True or validated_exposure.get('made_payment') is True or validated_exposure.get('shared_banking_details') is True))
+        device_exposure = interaction_type == 'opened_or_downloaded_file' or (interaction_type == 'other' and (validated_exposure.get('downloaded_or_opened_file') is True or validated_exposure.get('installed_software') is True or validated_exposure.get('granted_remote_access') is True))
+        account_exposure = interaction_type == 'entered_information' or (interaction_type == 'other' and (validated_exposure.get('entered_credentials') is True or validated_exposure.get('shared_personal_information') is True))
+        exposure_response_required = source_risk_level in {'medium', 'high'} or (overall_risk == 'high' and self._has_critical_exposure(interaction_type, user_exposure))
+        if financial_exposure and exposure_response_required:
+            return {'decision': 'flag', 'route': 'urgent_financial_response', 'priority': 'urgent', 'recommended_action': 'Contact the bank or affected organisation immediately using an official channel.'}
+        if device_exposure and exposure_response_required:
+            return {'decision': 'flag', 'route': 'device_security_response', 'priority': 'high', 'recommended_action': 'Stop using the suspicious file or software and perform an approved security scan.'}
+        if account_exposure and exposure_response_required:
+            return {'decision': 'flag', 'route': 'account_security_response', 'priority': 'high', 'recommended_action': 'Change affected credentials through the official website and enable multi-factor authentication.'}
+        if unknown_warning_signs and overall_risk != 'high':
+            return {'decision': 'review', 'route': 'unrecognised_pattern_review', 'priority': 'medium', 'recommended_action': 'Verify the message through an official channel because it contains an unfamiliar warning pattern.'}
+        if overall_risk == 'high':
+            return {'decision': 'flag', 'route': 'high_risk_guidance', 'priority': 'high', 'recommended_action': 'Stop interacting with the message and verify the request through an official channel.'}
+        if overall_risk == 'medium':
+            return {'decision': 'review', 'route': 'verification_guidance', 'priority': 'medium', 'recommended_action': 'Verify the sender through an official website, application or telephone number.'}
+        return {'decision': 'accept_with_caution', 'route': 'general_safety_education', 'priority': 'low', 'recommended_action': 'Remain cautious and do not share sensitive information with unverified senders.'}
