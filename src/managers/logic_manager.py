@@ -11,6 +11,10 @@ class LogicManager:
     """Apply local business rules to validated analysis evidence."""
 
     def __init__(self):
+        self._technical_thresholds = {
+            "high_malicious": 5, "high_ratio": 10, "high_negative_reputation": -20,
+            "medium_malicious": 1, "medium_suspicious": 2, "medium_ratio": 3,
+        }
         # Each instance owns its rule collections; no shared mutable tables.
         self._known_indicators = {'authority_impersonation',
          'credential_request',
@@ -316,3 +320,64 @@ class LogicManager:
         assessment = self._to_assessment(result)
         submission.set_assessment(assessment)
         return assessment
+
+    @staticmethod
+    def _parse_integer(value, field: str) -> int:
+        """Accept integers and integer strings, without truncating invalid data."""
+        if type(value) is int:
+            return value
+        if isinstance(value, str):
+            try:
+                return int(value.strip())
+            except ValueError:
+                pass
+        raise ValueError(f"{field} must be an integer.")
+
+    def _evaluate_technical_evidence(self, vt_data: dict) -> dict:
+        """Validate parsed scanner evidence and calculate technical risk locally."""
+        if not isinstance(vt_data, dict) or "error" in vt_data:
+            raise ValueError("A successful parsed VirusTotal response is required.")
+        stats = vt_data.get("detection_stats")
+        if not isinstance(stats, dict):
+            raise ValueError("VirusTotal detection statistics are missing.")
+        counts = {}
+        for name in ("malicious", "suspicious", "harmless", "undetected"):
+            if name not in stats:
+                raise ValueError(f"Missing VirusTotal engine count: {name}.")
+            counts[name] = self._parse_integer(stats[name], name)
+        counts["timeout"] = self._parse_integer(stats.get("timeout", 0), "timeout")
+        if any(value < 0 for value in counts.values()):
+            raise ValueError("VirusTotal detection counts cannot be negative.")
+        reputation = self._parse_integer(vt_data.get("reputation", 0), "reputation")
+        completed = sum(counts[name] for name in ("malicious", "suspicious", "harmless", "undetected"))
+        if completed == 0:
+            raise ValueError("No security engines completed their assessment.")
+        ratio = (counts["malicious"] + counts["suspicious"]) / completed * 100
+        thresholds = self._technical_thresholds
+        if (counts["malicious"] >= thresholds["high_malicious"]
+                or ratio >= thresholds["high_ratio"]
+                or reputation <= thresholds["high_negative_reputation"]):
+            risk = "high"
+        elif (counts["malicious"] >= thresholds["medium_malicious"]
+                or counts["suspicious"] >= thresholds["medium_suspicious"]
+                or ratio >= thresholds["medium_ratio"] or reputation < 0):
+            risk = "medium"
+        else:
+            risk = "low"
+        labels = []
+        for field in ("threat_names", "categories"):
+            values = vt_data.get(field, [])
+            if not isinstance(values, list) or any(not isinstance(item, str) for item in values):
+                raise ValueError(f"{field} must be a list of strings.")
+            labels.extend(item.strip() for item in values if item.strip())
+        return {
+            "technical_risk": risk,
+            "detection_ratio": round(ratio, 2),
+            "flags": sorted(set(labels)),
+            "risk_reasons": [
+                f"{counts['malicious']} engine(s) classified the item as malicious.",
+                f"{counts['suspicious']} engine(s) classified the item as suspicious.",
+                f"The detection ratio is {ratio:.2f}%.",
+                f"The VirusTotal reputation value is {reputation}.",
+            ],
+        }

@@ -374,5 +374,96 @@ class LogicManagerTextAssessmentTests(unittest.TestCase):
                 self.assertEqual(result.is_scam, expected)
 
 
+def make_vt(malicious=0, suspicious=0, harmless=0, undetected=100, timeout=0, reputation=0):
+    return {
+        "detection_stats": {"malicious": malicious, "suspicious": suspicious,
+                            "harmless": harmless, "undetected": undetected, "timeout": timeout},
+        "reputation": reputation, "threat_names": [], "categories": [],
+    }
+
+
+class LogicManagerTechnicalEvidenceTests(unittest.TestCase):
+    def setUp(self):
+        self.manager = LogicManager()
+
+    def test_malicious_count_boundaries(self):
+        for count, expected in [(0, "low"), (1, "medium"), (4, "medium"), (5, "high")]:
+            with self.subTest(count=count):
+                result = self.manager._evaluate_technical_evidence(make_vt(malicious=count))
+                self.assertEqual(result["technical_risk"], expected)
+
+    def test_ratio_threshold_boundaries(self):
+        # One suspicious engine avoids the separate >=2 suspicious-count rule.
+        for completed, expected in [(34, "low"), (33, "medium"), (11, "medium"), (10, "high")]:
+            with self.subTest(completed=completed):
+                result = self.manager._evaluate_technical_evidence(make_vt(suspicious=1, undetected=completed-1))
+                self.assertEqual(result["technical_risk"], expected)
+
+    def test_suspicious_count_boundary(self):
+        for count, expected in [(1, "low"), (2, "medium")]:
+            with self.subTest(count=count):
+                self.assertEqual(self.manager._evaluate_technical_evidence(make_vt(suspicious=count))["technical_risk"], expected)
+
+    def test_reputation_boundaries(self):
+        for reputation, expected in [(0, "low"), (-1, "medium"), (-19, "medium"), (-20, "high")]:
+            with self.subTest(reputation=reputation):
+                self.assertEqual(self.manager._evaluate_technical_evidence(make_vt(reputation=reputation))["technical_risk"], expected)
+
+    def test_timeouts_and_reported_total_do_not_dilute_ratio(self):
+        data = make_vt(malicious=1, undetected=9, timeout=90)
+        data["detection_stats"]["total"] = 100
+        result = self.manager._evaluate_technical_evidence(data)
+        self.assertEqual(result["detection_ratio"], 10.0)
+        self.assertEqual(result["technical_risk"], "high")
+
+    def test_zero_or_timeout_only_statistics_are_rejected(self):
+        for timeout in (0, 10):
+            with self.subTest(timeout=timeout), self.assertRaises(ValueError):
+                self.manager._evaluate_technical_evidence(make_vt(undetected=0, timeout=timeout))
+
+    def test_missing_and_error_responses_are_rejected(self):
+        for data in (None, {}, {"error": "Unavailable"}, {"detection_stats": []}):
+            with self.subTest(data=data), self.assertRaises(ValueError):
+                self.manager._evaluate_technical_evidence(data)
+
+    def test_missing_required_count_is_not_treated_as_zero(self):
+        data = make_vt()
+        del data["detection_stats"]["malicious"]
+        with self.assertRaises(ValueError):
+            self.manager._evaluate_technical_evidence(data)
+
+    def test_invalid_counts_are_rejected_without_truncation(self):
+        for value in (-1, True, 1.5, "1.5", None, "bad"):
+            with self.subTest(value=value):
+                data = make_vt()
+                data["detection_stats"]["malicious"] = value
+                with self.assertRaises(ValueError):
+                    self.manager._evaluate_technical_evidence(data)
+
+    def test_integer_strings_from_parsed_evidence_are_supported(self):
+        result = self.manager._evaluate_technical_evidence(make_vt(malicious="5", reputation="-20"))
+        self.assertEqual(result["technical_risk"], "high")
+
+    def test_invalid_reputation_is_rejected(self):
+        with self.assertRaises(ValueError):
+            self.manager._evaluate_technical_evidence(make_vt(reputation="unknown"))
+
+    def test_flags_are_unique_sorted_and_input_is_unchanged(self):
+        data = make_vt()
+        data.update(threat_names=["trojan", "phishing"], categories=["phishing", " "])
+        before = copy.deepcopy(data)
+        result = self.manager._evaluate_technical_evidence(data)
+        self.assertEqual(result["flags"], ["phishing", "trojan"])
+        self.assertEqual(data, before)
+
+    def test_malformed_labels_are_rejected(self):
+        for labels in ("trojan", None, [1]):
+            with self.subTest(labels=labels):
+                data = make_vt()
+                data["threat_names"] = labels
+                with self.assertRaises(ValueError):
+                    self.manager._evaluate_technical_evidence(data)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
