@@ -4,7 +4,7 @@ Encapsulated rules, evidence validation, text rules and exposure routing.
 No API, database, file or presentation operations belong in this class.
 """
 
-from ..models import Submission
+from ..models import AssessmentResult, Submission
 
 
 class LogicManager:
@@ -240,3 +240,79 @@ class LogicManager:
         if overall_risk == 'medium':
             return {'decision': 'review', 'route': 'verification_guidance', 'priority': 'medium', 'recommended_action': 'Verify the sender through an official website, application or telephone number.'}
         return {'decision': 'accept_with_caution', 'route': 'general_safety_education', 'priority': 'low', 'recommended_action': 'Remain cautious and do not share sensitive information with unverified senders.'}
+
+    def _get_indicator_evidence(self, indicators, indicator_names):
+        """Return evidence for the requested active indicators."""
+        evidence_items = []
+        for indicator_name in sorted(indicator_names):
+            indicator_data = indicators.get(indicator_name, {})
+            evidence = indicator_data.get('evidence', '').strip()
+            evidence_items.append({'indicator': indicator_name, 'evidence': evidence})
+        return evidence_items
+
+    def _determine_scam_outcome(self, gemini_result, message_result):
+        """Determine whether sufficient evidence supports a scam outcome."""
+        classification = gemini_result.get('message_classification', 'uncertain')
+        matched_rules = message_result.get('matched_rules', [])
+        message_level = message_result.get('level', 'low')
+        has_high_rule = any((rule.get('risk_level') == 'high' for rule in matched_rules))
+        if has_high_rule:
+            return True
+        if classification == 'scam' and message_level in {'medium', 'high'}:
+            return True
+        return False
+
+    def _evaluate_text_risk(self, gemini_result, interaction_type):
+        """Apply all text-analysis business rules."""
+        if not isinstance(gemini_result, dict):
+            raise ValueError('Gemini analysis must be a dictionary.')
+        if 'error' in gemini_result:
+            raise ValueError('Cannot process an unsuccessful Gemini response.')
+        indicators = gemini_result.get('indicators', {})
+        user_exposure = gemini_result.get('user_exposure')
+        active_indicators = self._get_active_indicators(indicators)
+        invalid_indicators = []
+        if invalid_indicators:
+            raise ValueError('The AI response contains missing or invalid warning indicators. A reliable risk assessment could not be completed. Please try again.')
+        message_result = self._determine_message_risk(gemini_result, active_indicators)
+        exposure_result = self._determine_user_exposure(interaction_type, user_exposure)
+        overall_risk = self._determine_overall_risk(message_result['level'], exposure_result['level'])
+        if active_indicators and self._has_critical_exposure(interaction_type, user_exposure):
+            overall_risk = 'high'
+        route_result = self._determine_route(overall_risk, interaction_type, user_exposure, message_result['unknown_warning_signs'], message_result['level'])
+        evidence = self._get_indicator_evidence(indicators, active_indicators)
+        is_scam = self._determine_scam_outcome(gemini_result, message_result)
+        risk_reasons = message_result['reasons'] + [exposure_result['reason']]
+        return {'is_scam': is_scam, 'risk_score': None, 'risk_category': overall_risk, 'message_risk': message_result['level'], 'exposure_level': exposure_result['level'], 'overall_risk': overall_risk, 'decision': route_result['decision'], 'route': route_result['route'], 'priority': route_result['priority'], 'recommended_action': route_result['recommended_action'], 'flags': message_result['flags'], 'active_indicators': sorted(active_indicators), 'indicator_evidence': evidence, 'matched_rules': message_result['matched_rules'], 'unknown_warning_signs': message_result['unknown_warning_signs'], 'invalid_indicators': invalid_indicators, 'risk_reasons': risk_reasons, 'message_reasons': message_result['reasons'], 'exposure_reason': exposure_result['reason'], 'matched_exposures': exposure_result['matched_exposures']}
+
+    @staticmethod
+    def _to_assessment(result: dict) -> AssessmentResult:
+        """Adapt rule findings to the shared domain model without changing risk rules."""
+        data = dict(result)
+        if data["exposure_level"] == "unknown":
+            # The shared model accepts only low/medium/high. Keep the explanation
+            # explicit so medium is not mistaken for confirmed user activity.
+            data["exposure_level"] = "medium"
+            note = "Exposure is unconfirmed; medium is used as the model-compatible placeholder."
+            data["exposure_reason"] += " " + note
+            data["risk_reasons"] = list(data["risk_reasons"]) + [note]
+        data["recovery_steps"] = [data["recommended_action"]]
+        return AssessmentResult.from_dict(data)
+
+    def evaluate_text_threat(self, submission: Submission, ai_data: dict) -> AssessmentResult:
+        """Evaluate text locally and attach a result only after validation succeeds."""
+        self._validate_submission(submission, {"text"})
+        if not isinstance(ai_data, dict):
+            raise ValueError("AI analysis must be a dictionary.")
+        if submission.interaction_type == "other":
+            exposure = ai_data.get("user_exposure")
+            if exposure is not None:
+                if not isinstance(exposure, dict):
+                    raise ValueError("Interpreted exposure must be a dictionary or None.")
+                for name in self._high_exposure_fields | self._medium_exposure_fields:
+                    if name in exposure and not isinstance(exposure[name], bool):
+                        raise ValueError("Interpreted exposure flags must be booleans.")
+        result = self._evaluate_text_risk(ai_data, submission.interaction_type)
+        assessment = self._to_assessment(result)
+        submission.set_assessment(assessment)
+        return assessment

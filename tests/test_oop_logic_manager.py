@@ -1,9 +1,10 @@
 """Offline tests for the OOP LogicManager, expanded with each stage."""
 
+import copy
 import unittest
 
 from src.managers.logic_manager import LogicManager
-from src.models import Submission
+from src.models import AssessmentResult, Submission
 
 
 INDICATOR_NAMES = (
@@ -264,6 +265,113 @@ class LogicManagerExposureRoutingTests(unittest.TestCase):
     def test_critical_exposure_supports_high_priority_route_for_low_source(self):
         result = self.route("other", source="low", overall="high", exposure={"shared_otp": True})
         self.assertEqual(result["route"], "urgent_financial_response")
+
+
+class LogicManagerTextAssessmentTests(unittest.TestCase):
+    def setUp(self):
+        self.manager = LogicManager()
+
+    def ai(self, *active):
+        return {"indicators": make_indicators(*active), "message_classification": "uncertain"}
+
+    def test_returns_and_attaches_same_domain_result(self):
+        sub = Submission("text", "Sign in", submission_id=17)
+        result = self.manager.evaluate_text_threat(sub, self.ai("credential_request", "suspicious_link"))
+        self.assertIsInstance(result, AssessmentResult)
+        self.assertIs(sub.assessment, result)
+        self.assertEqual(result.submission_id, 17)
+        self.assertEqual(result.message_risk, "high")
+        self.assertEqual(result.overall_risk, "high")
+        self.assertTrue(result.is_scam)
+        self.assertEqual(result.matched_rules[0]["rule_id"], "credential_phishing_rule")
+        self.assertTrue(result.risk_reasons)
+        self.assertEqual(result.recovery_steps, [result.recommended_action])
+        self.assertEqual(sub.processing_status, "pending")
+
+    def test_no_warning_indicators_return_low_unconfirmed_result(self):
+        result = self.manager.evaluate_text_threat(Submission("text", "See you tomorrow"), self.ai())
+        self.assertEqual(result.overall_risk, "low")
+        self.assertFalse(result.is_scam)
+        self.assertIsNone(result.risk_score)
+        self.assertEqual(result.route, "general_safety_education")
+
+    def test_all_six_actions_apply_to_suspicious_text(self):
+        cases = [
+            ("viewed_only", None, "low", "medium", "verification_guidance"),
+            ("clicked_link", None, "medium", "medium", "verification_guidance"),
+            ("entered_information", None, "high", "high", "account_security_response"),
+            ("opened_or_downloaded_file", None, "high", "high", "device_security_response"),
+            ("made_payment_or_shared_banking_details", None, "high", "high", "urgent_financial_response"),
+            ("other", {"shared_otp": True}, "high", "high", "urgent_financial_response"),
+        ]
+        for action, exposure, level, risk, route in cases:
+            with self.subTest(action=action):
+                data = self.ai("authority_impersonation", "urgency_pressure")
+                data["user_exposure"] = exposure
+                result = self.manager.evaluate_text_threat(Submission("text", "Act now", action), data)
+                self.assertEqual(result.exposure_level, level)
+                self.assertEqual(result.overall_risk, risk)
+                self.assertEqual(result.route, route)
+
+    def test_payment_with_even_one_warning_escalates_and_routes_urgently(self):
+        result = self.manager.evaluate_text_threat(
+            Submission("text", "Urgent", "made_payment_or_shared_banking_details"),
+            self.ai("urgency_pressure"),
+        )
+        self.assertEqual(result.message_risk, "low")
+        self.assertEqual(result.overall_risk, "high")
+        self.assertEqual(result.priority, "urgent")
+        self.assertEqual(result.route, "urgent_financial_response")
+
+    def test_other_without_interpretation_is_explicitly_unconfirmed(self):
+        result = self.manager.evaluate_text_threat(
+            Submission("text", "Act now", "other"),
+            self.ai("authority_impersonation", "urgency_pressure"),
+        )
+        self.assertEqual(result.exposure_level, "medium")
+        self.assertEqual(result.overall_risk, "medium")
+        self.assertIn("unconfirmed", result.exposure_reason)
+
+    def test_invalid_ai_does_not_replace_existing_assessment(self):
+        sub = Submission("text", "A message")
+        previous = self.manager.evaluate_text_threat(sub, self.ai())
+        broken = self.ai()
+        del broken["indicators"]["otp_request"]
+        for data in (None, {"error": "API unavailable"}, broken):
+            with self.subTest(data=data):
+                with self.assertRaises(ValueError):
+                    self.manager.evaluate_text_threat(sub, data)
+                self.assertIs(sub.assessment, previous)
+
+    def test_wrong_submission_type_is_rejected_without_attachment(self):
+        sub = Submission("file", "sample.pdf")
+        with self.assertRaises(ValueError):
+            self.manager.evaluate_text_threat(sub, self.ai())
+        self.assertIsNone(sub.assessment)
+
+    def test_invalid_custom_exposure_is_rejected(self):
+        for exposure in ("unknown", {"shared_otp": "true"}):
+            with self.subTest(exposure=exposure):
+                sub = Submission("text", "A message", "other")
+                data = self.ai()
+                data["user_exposure"] = exposure
+                with self.assertRaises(ValueError):
+                    self.manager.evaluate_text_threat(sub, data)
+                self.assertIsNone(sub.assessment)
+
+    def test_supplied_ai_data_is_not_modified(self):
+        data = self.ai("credential_request", "suspicious_link")
+        before = copy.deepcopy(data)
+        self.manager.evaluate_text_threat(Submission("text", "Sign in"), data)
+        self.assertEqual(data, before)
+
+    def test_scam_classification_needs_supporting_warning_evidence(self):
+        for active, expected in [((), False), (("urgency_pressure",), False), (("suspicious_link",), True)]:
+            with self.subTest(active=active):
+                data = self.ai(*active)
+                data["message_classification"] = "scam"
+                result = self.manager.evaluate_text_threat(Submission("text", "A message"), data)
+                self.assertEqual(result.is_scam, expected)
 
 
 if __name__ == "__main__":
