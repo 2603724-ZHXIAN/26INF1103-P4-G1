@@ -327,6 +327,50 @@ class DataManager:
         with self._get_connection() as connection:
             connection.executescript(SCHEMA)
 
+    def save_submission(self, submission: Submission) -> int:
+        """Insert/update a submission and its attached children atomically.
+
+        A previously assigned ID must identify an existing record.
+        Existing evidence rows are replaced by the object's evidence collection.
+        Object IDs are updated only after the transaction commits successfully.
+        """
+        if not isinstance(submission, Submission):
+            raise TypeError("submission must be a Submission object.")
+        data = submission.to_dict()
+        fields = (
+            "data_origin", "dataset_batch", "input_type", "input_value",
+            "input_hash", "file_path", "interaction_type", "interaction_description",
+            "processing_status", "error_message", "created_at", "completed_at",
+        )
+        with self._get_connection() as connection:
+            sub_id = submission.submission_id
+            values = [data[name] for name in fields]
+            if sub_id is None:
+                cursor = connection.execute(
+                    "INSERT INTO submission (" + ", ".join(fields) + ") VALUES ("
+                    + ", ".join("?" for _ in fields) + ")", values,
+                )
+                sub_id = cursor.lastrowid
+            else:
+                self._check_id(sub_id)
+                self._require_submission(connection, sub_id)
+                connection.execute(
+                    "UPDATE submission SET " + ", ".join(f"{name} = ?" for name in fields)
+                    + " WHERE submission_id = ?", values + [sub_id],
+                )
+            assessment_id = None
+            if submission.assessment is not None:
+                assessment_id = self._write_assessment(
+                    connection, sub_id, submission.assessment, "unknown"
+                )
+            evidence_ids = self._write_evidences(connection, sub_id, submission.evidences)
+        submission.submission_id = sub_id
+        if assessment_id is not None:
+            submission.assessment.assessment_id = assessment_id
+        for evidence, evidence_id in zip(submission.evidences, evidence_ids):
+            evidence.evidence_id = evidence_id
+        return sub_id
+
     def _write_assessment(self, connection, submission_id, assessment, model_name):
         data = assessment.to_dict()
         fields = (
