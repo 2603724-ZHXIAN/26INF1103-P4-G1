@@ -163,6 +163,44 @@ class DataManagerTests(unittest.TestCase):
         finally:
             manager.close()
 
+    def test_reporting_and_trending_queries(self):
+        sub_id = self.manager.save_submission(self.complete_submission())
+        with self.manager._get_connection() as conn:
+            conn.execute(
+                """INSERT INTO text_analysis (
+                    submission_id, message_classification, primary_threat_type,
+                    analysis_confidence, requested_actions, possible_intents,
+                    extracted_urls, extracted_contacts, suspected_threat_types,
+                    other_warning_signs, user_exposure, model_name, raw_gemini_response, created_at
+                ) VALUES (?, 'scam', 'credential_phishing', 'high', '[]', '[]', '[]', '[]', '[]', '[]', '{}', 'test-model', '{}', '2026-10-31')""",
+                (sub_id,)
+            )
+
+        # Test get_top_threat_types
+        top_threats = self.manager.get_top_threat_types(limit=5)
+        self.assertEqual(len(top_threats), 1)
+        self.assertEqual(top_threats[0]["primary_threat_type"], "credential_phishing")
+
+        # Test get_risk_category_counts
+        counts = self.manager.get_risk_category_counts()
+        self.assertEqual(len(counts), 1)
+        self.assertEqual(counts[0]["risk_category"], "high")
+
+        # Test get_incidents_by_threat_type
+        incidents = self.manager.get_incidents_by_threat_type("credential_phishing")
+        self.assertEqual(len(incidents), 1)
+        self.assertEqual(incidents[0]["submission_id"], sub_id)
+
+        # Test get_submission_report
+        report = self.manager.get_submission_report(sub_id)
+        self.assertIsNotNone(report)
+        self.assertEqual(report["submission_id"], sub_id)
+        self.assertEqual(report["primary_threat_type"], "credential_phishing")
+
+        # Test aliases
+        self.assertEqual(len(self.manager.search_records("Account")), 1)
+        self.assertEqual(len(self.manager.get_records_by_risk_level("high")), 1)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

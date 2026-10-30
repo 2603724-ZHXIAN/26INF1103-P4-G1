@@ -124,6 +124,11 @@ class TestIOManagerPromptsAndRequests(unittest.TestCase):
 
     def setUp(self):
         self.io = IOManager(use_color=False)
+        self._stdout_patch = patch("sys.stdout", new_callable=io.StringIO)
+        self._stdout_patch.start()
+
+    def tearDown(self):
+        self._stdout_patch.stop()
 
     @patch("builtins.input", side_effect=["1"])
     def test_collect_interaction_details_viewed_only(self, mock_input):
@@ -208,6 +213,11 @@ class TestIOManagerSeparationOfConcerns(unittest.TestCase):
     def setUp(self):
         self.mock_dm = MagicMock()
         self.io = IOManager(use_color=False, data_manager=self.mock_dm)
+        self._stdout_patch = patch("sys.stdout", new_callable=io.StringIO)
+        self._stdout_patch.start()
+
+    def tearDown(self):
+        self._stdout_patch.stop()
 
     @patch("builtins.input", side_effect=["4", "1", "invoice", "0"])
     def test_history_query_delegates_to_data_manager_search(self, mock_input):
@@ -353,15 +363,16 @@ class TestIOManagerReporting(unittest.TestCase):
             },
         ]
 
-        with patch("builtins.input", return_value="1"):
-            idx = self.io.browse_historical_records(records)
-            self.assertEqual(idx, 0)
+        with patch("sys.stdout", new=io.StringIO()):
+            with patch("builtins.input", return_value="1"):
+                idx = self.io.browse_historical_records(records)
+                self.assertEqual(idx, 0)
 
-        with patch("builtins.input", return_value="0"):
-            idx = self.io.browse_historical_records(records)
-            self.assertIsNone(idx)
+            with patch("builtins.input", return_value="0"):
+                idx = self.io.browse_historical_records(records)
+                self.assertIsNone(idx)
 
-        self.assertIsNone(self.io.browse_historical_records([]))
+            self.assertIsNone(self.io.browse_historical_records([]))
 
     def test_browse_historical_table_aliases_records(self):
         records = [
