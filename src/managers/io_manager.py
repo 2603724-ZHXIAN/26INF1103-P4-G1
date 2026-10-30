@@ -38,7 +38,8 @@ from ..models.assessment import AssessmentResult
 from ..models.submission import Submission
 
 try:
-    from .. import data_manager as default_db
+    from .data_manager import DataManager
+    default_db = DataManager()
 except ImportError:
     default_db = None
 
