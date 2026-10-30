@@ -9,6 +9,7 @@ import logging
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Optional
 
 from ..models import AssessmentResult, Submission, ThreatEvidence
 
@@ -523,3 +524,126 @@ class DataManager:
                 (f"%{escaped}%",),
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def search_records(self, keyword: str) -> list[dict]:
+        """Compatibility alias for search_by_keyword."""
+        return self.search_by_keyword(keyword)
+
+    def get_records_by_risk_level(self, risk_category: str) -> list[dict]:
+        """Compatibility alias for query_by_risk."""
+        return self.query_by_risk(risk_category)
+
+    def get_top_threat_types(self, limit: int = 10) -> list[dict]:
+        """Return the most common primary threat types from text analyses."""
+        with self._get_connection() as connection:
+            rows = connection.execute(
+                """SELECT primary_threat_type, COUNT(*) AS total
+                FROM text_analysis
+                GROUP BY primary_threat_type
+                ORDER BY total DESC
+                LIMIT ?""",
+                (limit,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_risk_category_counts(self) -> list[dict]:
+        """Return incident distribution counts by risk category."""
+        with self._get_connection() as connection:
+            rows = connection.execute(
+                """SELECT risk_category, COUNT(*) AS total
+                FROM final_assessment
+                GROUP BY risk_category
+                ORDER BY total DESC"""
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_incidents_by_threat_type(self, threat_type: str, limit: int = 10) -> list[dict]:
+        """Return the latest incidents matching a specific threat type."""
+        with self._get_connection() as connection:
+            rows = connection.execute(
+                """SELECT
+                    s.submission_id,
+                    s.input_type,
+                    s.input_value,
+                    s.created_at,
+                    ta.primary_threat_type,
+                    fa.risk_category
+                FROM submission AS s
+                JOIN text_analysis AS ta ON ta.submission_id = s.submission_id
+                LEFT JOIN final_assessment AS fa ON fa.submission_id = s.submission_id
+                WHERE ta.primary_threat_type = ?
+                ORDER BY s.created_at DESC
+                LIMIT ?""",
+                (threat_type, limit),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_submission_report(self, submission_id: int) -> Optional[dict]:
+        """Return a formatted report dictionary for an incident."""
+        self._check_id(submission_id)
+        with self._get_connection() as connection:
+            row = connection.execute(
+                """SELECT
+                    s.*,
+                    ta.message_classification,
+                    ta.primary_threat_type,
+                    ta.analysis_confidence,
+                    ta.language,
+                    ta.message_type,
+                    ta.claimed_entity,
+                    ta.requested_actions,
+                    ta.possible_intents,
+                    ta.extracted_urls,
+                    ta.extracted_contacts,
+                    ta.suspected_threat_types,
+                    ta.other_warning_signs,
+                    ta.user_exposure,
+                    eg.threat_explanations,
+                    eg.threat_summary,
+                    eg.what_it_is,
+                    eg.why_dangerous,
+                    eg.preventive_steps,
+                    eg.recovery_steps,
+                    eg.limitations,
+                    fa.is_scam,
+                    fa.risk_score,
+                    fa.risk_category,
+                    fa.message_risk,
+                    fa.exposure_level,
+                    fa.overall_risk,
+                    fa.decision,
+                    fa.route,
+                    fa.priority,
+                    fa.recommended_action,
+                    fa.risk_reasons,
+                    fa.flags,
+                    fa.active_indicators,
+                    fa.matched_rules,
+                    fa.matched_exposures,
+                    fa.exposure_reason
+                FROM submission AS s
+                LEFT JOIN text_analysis AS ta ON ta.submission_id = s.submission_id
+                LEFT JOIN educational_guidance AS eg ON eg.submission_id = s.submission_id
+                LEFT JOIN final_assessment AS fa ON fa.submission_id = s.submission_id
+                WHERE s.submission_id = ?""",
+                (submission_id,),
+            ).fetchone()
+
+        if row is None:
+            return None
+
+        report = dict(row)
+        json_fields = [
+            "requested_actions", "possible_intents", "extracted_urls",
+            "extracted_contacts", "suspected_threat_types", "other_warning_signs",
+            "user_exposure", "threat_explanations", "why_dangerous", "preventive_steps",
+            "recovery_steps", "limitations", "risk_reasons", "flags", "active_indicators",
+            "matched_rules", "matched_exposures",
+        ]
+        for field in json_fields:
+            if field in report and report[field]:
+                try:
+                    report[field] = json.loads(report[field])
+                except (json.JSONDecodeError, TypeError):
+                    pass
+        return report
