@@ -308,8 +308,58 @@ class DataManager:
             self._memory_connection.close()
             self._memory_connection = None
 
+    @staticmethod
+    def _check_id(submission_id):
+        if type(submission_id) is not int or submission_id <= 0:
+            raise ValueError("submission_id must be a positive integer.")
+
+    @staticmethod
+    def _require_submission(connection, submission_id):
+        row = connection.execute(
+            "SELECT submission_id FROM submission WHERE submission_id = ?",
+            (submission_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("No submission exists with that ID.")
+
     def initialize_database(self) -> None:
         """Create the existing application tables and indexes if absent."""
         with self._get_connection() as connection:
             connection.executescript(SCHEMA)
+
+    def _write_evidences(self, connection, submission_id, evidences):
+        for evidence in evidences:
+            if not isinstance(evidence, ThreatEvidence):
+                raise TypeError("Every evidence must be a ThreatEvidence object.")
+            if evidence.submission_id not in (None, submission_id):
+                raise ValueError("Evidence belongs to a different submission.")
+        connection.execute("DELETE FROM detection_evidence WHERE submission_id = ?", (submission_id,))
+        evidence_ids = []
+        for evidence in evidences:
+            cursor = connection.execute(
+                """INSERT INTO detection_evidence (
+                    submission_id, evidence_source, evidence_type, evidence_name,
+                    evidence_value, evidence_excerpt, severity, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (submission_id, evidence.source, evidence.evidence_type,
+                 evidence.evidence_name, evidence.evidence_value,
+                 evidence.evidence_excerpt, evidence.severity, evidence.created_at),
+            )
+            evidence_ids.append(cursor.lastrowid)
+        return evidence_ids
+
+    def save_evidences(self, submission_id: int, evidences: list[ThreatEvidence]) -> None:
+        """Atomically replace this submission's evidence snapshot.
+
+        Repeated saves do not duplicate evidence. An empty list clears it.
+        """
+        self._check_id(submission_id)
+        if not isinstance(evidences, list):
+            raise TypeError("evidences must be a list of ThreatEvidence objects.")
+        with self._get_connection() as connection:
+            self._require_submission(connection, submission_id)
+            ids = self._write_evidences(connection, submission_id, evidences)
+        for evidence, evidence_id in zip(evidences, ids):
+            evidence.submission_id = submission_id
+            evidence.evidence_id = evidence_id
 
