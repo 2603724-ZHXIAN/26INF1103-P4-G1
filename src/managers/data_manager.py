@@ -327,6 +327,67 @@ class DataManager:
         with self._get_connection() as connection:
             connection.executescript(SCHEMA)
 
+    def _write_assessment(self, connection, submission_id, assessment, model_name):
+        data = assessment.to_dict()
+        fields = (
+            "is_scam", "risk_score", "risk_category", "message_risk",
+            "exposure_level", "overall_risk", "decision", "route", "priority",
+            "recommended_action", "risk_reasons", "flags", "active_indicators",
+            "matched_rules", "matched_exposures", "exposure_reason", "created_at",
+        )
+        json_fields = {"risk_reasons", "flags", "active_indicators", "matched_rules", "matched_exposures"}
+        values = []
+        for name in fields:
+            value = data[name]
+            if name in json_fields:
+                value = json.dumps(value, ensure_ascii=False)
+            elif name == "is_scam":
+                value = int(value)
+            values.append(value)
+        columns = ("submission_id",) + fields + ("unknown_warning_signs", "invalid_indicators")
+        connection.execute(
+            "INSERT INTO final_assessment (" + ", ".join(columns) + ") VALUES ("
+            + ", ".join("?" for _ in columns) + ") ON CONFLICT(submission_id) DO UPDATE SET "
+            + ", ".join(f"{name} = excluded.{name}" for name in fields),
+            [submission_id] + values + ["[]", "[]"],
+        )
+        connection.execute(
+            """INSERT INTO educational_guidance (
+                submission_id, threat_explanations, threat_summary, what_it_is,
+                why_dangerous, preventive_steps, recovery_steps, limitations,
+                model_name, created_at
+            ) VALUES (?, '[]', ?, ?, '[]', '[]', ?, '[]', ?, ?)
+            ON CONFLICT(submission_id) DO UPDATE SET
+                threat_summary = excluded.threat_summary,
+                what_it_is = excluded.what_it_is,
+                recovery_steps = excluded.recovery_steps,
+                model_name = CASE WHEN excluded.model_name = 'unknown'
+                    THEN educational_guidance.model_name ELSE excluded.model_name END,
+                created_at = excluded.created_at""",
+            (submission_id, assessment.threat_summary, assessment.what_it_is,
+             json.dumps(assessment.recovery_steps, ensure_ascii=False), model_name,
+             assessment.created_at),
+        )
+        return connection.execute(
+            "SELECT assessment_id FROM final_assessment WHERE submission_id = ?",
+            (submission_id,),
+        ).fetchone()["assessment_id"]
+
+    def save_assessment(self, submission_id: int, assessment: AssessmentResult, model_name: str) -> None:
+        """Upsert the assessment and its available educational fields together."""
+        self._check_id(submission_id)
+        if not isinstance(assessment, AssessmentResult):
+            raise TypeError("assessment must be an AssessmentResult object.")
+        if not isinstance(model_name, str) or not model_name.strip():
+            raise ValueError("model_name must be a non-empty string.")
+        if assessment.submission_id not in (None, submission_id):
+            raise ValueError("Assessment belongs to a different submission.")
+        with self._get_connection() as connection:
+            self._require_submission(connection, submission_id)
+            assessment_id = self._write_assessment(connection, submission_id, assessment, model_name.strip())
+        assessment.submission_id = submission_id
+        assessment.assessment_id = assessment_id
+
     def _write_evidences(self, connection, submission_id, evidences):
         for evidence in evidences:
             if not isinstance(evidence, ThreatEvidence):
