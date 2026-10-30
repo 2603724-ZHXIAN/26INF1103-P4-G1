@@ -4,28 +4,15 @@ Database failures raise DataManagerError for the coordinator to handle.
 None from get_submission_by_id means not found, not database failure.
 """
 
-
 import json
-
-
 import logging
-
-
 import sqlite3
-
-
 from contextlib import contextmanager
-
-
 from pathlib import Path
-
 
 from ..models import AssessmentResult, Submission, ThreatEvidence
 
-
 LOGGER = logging.getLogger(__name__)
-
-
 SCHEMA = """
     CREATE TABLE IF NOT EXISTS submission (
         submission_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -468,3 +455,71 @@ class DataManager:
             evidence.submission_id = submission_id
             evidence.evidence_id = evidence_id
 
+    @staticmethod
+    def _decode_json(value, field):
+        try:
+            decoded = json.loads(value)
+            if not isinstance(decoded, list):
+                raise ValueError("Expected a JSON list.")
+            return decoded
+        except (ValueError, TypeError) as error:
+            raise DataManagerError(f"Stored {field} is invalid.") from error
+
+    def get_submission_by_id(self, submission_id: int):
+        """Return the composed domain object, or None when the ID is absent."""
+        self._check_id(submission_id)
+        with self._get_connection() as connection:
+            row = connection.execute("SELECT * FROM submission WHERE submission_id = ?", (submission_id,)).fetchone()
+            if row is None:
+                return None
+            data = dict(row)
+            result = connection.execute("SELECT * FROM final_assessment WHERE submission_id = ?", (submission_id,)).fetchone()
+            guidance = connection.execute("SELECT * FROM educational_guidance WHERE submission_id = ?", (submission_id,)).fetchone()
+            evidences = connection.execute("SELECT * FROM detection_evidence WHERE submission_id = ? ORDER BY evidence_id", (submission_id,)).fetchall()
+            if result is not None:
+                assessment = dict(result)
+                assessment["is_scam"] = bool(assessment["is_scam"])
+                for field in ("risk_reasons", "flags", "active_indicators", "matched_rules", "matched_exposures"):
+                    assessment[field] = self._decode_json(assessment[field], field)
+                if guidance is not None:
+                    assessment.update(
+                        recovery_steps=self._decode_json(guidance["recovery_steps"], "recovery_steps"),
+                        threat_summary=guidance["threat_summary"], what_it_is=guidance["what_it_is"],
+                    )
+                data["assessment"] = assessment
+            data["evidences"] = [dict(evidence) for evidence in evidences]
+            try:
+                return Submission.from_dict(data)
+            except (ValueError, TypeError, KeyError) as error:
+                raise DataManagerError("Stored submission could not be reconstructed.") from error
+
+    def query_by_risk(self, risk_category: str) -> list[dict]:
+        """Return historical rows filtered by a validated risk category."""
+        if not isinstance(risk_category, str):
+            raise ValueError("risk_category must be low, medium or high.")
+        risk_category = risk_category.strip().lower()
+        if risk_category not in AssessmentResult.VALID_RISK_LEVELS:
+            raise ValueError("risk_category must be low, medium or high.")
+        with self._get_connection() as connection:
+            rows = connection.execute(
+                """SELECT s.*, a.risk_category, a.overall_risk, a.priority, a.route
+                FROM submission s JOIN final_assessment a USING (submission_id)
+                WHERE a.risk_category = ? ORDER BY s.created_at DESC, s.submission_id DESC""",
+                (risk_category,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def search_by_keyword(self, keyword: str) -> list[dict]:
+        """Search literal text/URL fragments; empty text returns all records."""
+        if not isinstance(keyword, str):
+            raise TypeError("keyword must be a string.")
+        escaped = keyword.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        with self._get_connection() as connection:
+            rows = connection.execute(
+                """SELECT s.*, a.risk_category, a.overall_risk, a.priority, a.route
+                FROM submission s LEFT JOIN final_assessment a USING (submission_id)
+                WHERE s.input_value LIKE ? ESCAPE '\\'
+                ORDER BY s.created_at DESC, s.submission_id DESC""",
+                (f"%{escaped}%",),
+            ).fetchall()
+        return [dict(row) for row in rows]
