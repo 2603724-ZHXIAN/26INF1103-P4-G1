@@ -1,6 +1,8 @@
 """VirusTotalScanner service implementation.
 
-Concrete class implementing the IThreatScanner interface.
+Standalone concrete service for URL and file reputation analysis.
+Follows the YAGNI principle: no premature abstract interface is used because
+VirusTotal is the sole scanner provider in the system.
 Provides local file hashing (privacy-first), URL analysis polling,
 and multi-engine telemetry parsing via the VirusTotal v3 REST API.
 """
@@ -15,13 +17,11 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
-from ..interfaces.threat_scanner import IThreatScanner
-
 LOGGER = logging.getLogger(__name__)
 
 
-class VirusTotalScanner(IThreatScanner):
-    """VirusTotal v3 threat intelligence scanner implementing IThreatScanner."""
+class VirusTotalScanner:
+    """VirusTotal v3 threat intelligence scanner (standalone concrete service)."""
 
     VT_BASE_URL = "https://www.virustotal.com/api/v3"
     SUPPORTED_HASH_LENGTHS = {32, 40, 64}
@@ -42,7 +42,7 @@ class VirusTotalScanner(IThreatScanner):
         self._max_poll_attempts: int = max(1, int(max_poll_attempts))
 
     # -------------------------------------------------------------------------
-    # IThreatScanner Interface Implementation
+    # Core Scanner Operations
     # -------------------------------------------------------------------------
 
     def is_available(self) -> bool:

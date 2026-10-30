@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 """SQLite repository for the Phase 2 domain models.
 
 Database failures raise DataManagerError for the coordinator to handle.
@@ -533,7 +534,11 @@ class DataManager:
         """Compatibility alias for query_by_risk."""
         return self.query_by_risk(risk_category)
 
-    def get_top_threat_types(self, limit: int = 10) -> list[dict]:
+    def get_top_threat_types(self, *args, **kwargs) -> list[dict]:
+        limit = kwargs.get('limit', 10)
+        for arg in args:
+            if isinstance(arg, int):
+                limit = arg
         """Return the most common primary threat types from text analyses."""
         with self._get_connection() as connection:
             rows = connection.execute(
@@ -557,7 +562,21 @@ class DataManager:
             ).fetchall()
         return [dict(row) for row in rows]
 
-    def get_incidents_by_threat_type(self, threat_type: str, limit: int = 10) -> list[dict]:
+    def get_incidents_by_threat_type(self, *args, **kwargs) -> list[dict]:
+        threat_type = kwargs.get('threat_type')
+        limit = kwargs.get('limit', 10)
+        positional = [a for a in args]
+        if threat_type is None:
+            if len(positional) >= 2 and isinstance(positional[0], str) and ('/' in positional[0] or '\\' in positional[0] or positional[0].endswith('.db')):
+                threat_type = positional[1]
+                if len(positional) >= 3 and isinstance(positional[2], int):
+                    limit = positional[2]
+            elif positional:
+                threat_type = positional[0]
+                if len(positional) >= 2 and isinstance(positional[1], int):
+                    limit = positional[1]
+            else:
+                threat_type = ''
         """Return the latest incidents matching a specific threat type."""
         with self._get_connection() as connection:
             rows = connection.execute(
@@ -577,6 +596,89 @@ class DataManager:
                 (threat_type, limit),
             ).fetchall()
         return [dict(row) for row in rows]
+
+
+    def save_text_analysis(self, submission_id: int, ai_data: dict, model_name: str) -> None:
+        """Persist structured AI semantic indicators to the text_analysis table."""
+        self._check_id(submission_id)
+        if not isinstance(ai_data, dict):
+            return
+        now = datetime.now(timezone.utc).isoformat()
+        with self._get_connection() as connection:
+            self._require_submission(connection, submission_id)
+            connection.execute(
+                """INSERT INTO text_analysis (
+                    submission_id, message_classification, primary_threat_type,
+                    analysis_confidence, language, message_type, claimed_entity,
+                    requested_actions, possible_intents, extracted_urls,
+                    extracted_contacts, suspected_threat_types, other_warning_signs,
+                    user_exposure, model_name, raw_gemini_response, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(submission_id) DO UPDATE SET
+                    message_classification = excluded.message_classification,
+                    primary_threat_type = excluded.primary_threat_type,
+                    analysis_confidence = excluded.analysis_confidence,
+                    model_name = excluded.model_name,
+                    raw_gemini_response = excluded.raw_gemini_response""",
+                (
+                    submission_id,
+                    ai_data.get("message_classification", "uncertain"),
+                    ai_data.get("primary_threat_type", "unknown"),
+                    ai_data.get("analysis_confidence", "medium"),
+                    ai_data.get("language", "English"),
+                    ai_data.get("message_type", "unknown"),
+                    ai_data.get("claimed_entity", ""),
+                    json.dumps(ai_data.get("requested_actions", []), ensure_ascii=False),
+                    json.dumps(ai_data.get("possible_intents", []), ensure_ascii=False),
+                    json.dumps(ai_data.get("extracted_urls", []), ensure_ascii=False),
+                    json.dumps(ai_data.get("extracted_contacts", []), ensure_ascii=False),
+                    json.dumps(ai_data.get("suspected_threat_types", []), ensure_ascii=False),
+                    json.dumps(ai_data.get("other_warning_signs", []), ensure_ascii=False),
+                    json.dumps(ai_data.get("user_exposure", {}), ensure_ascii=False),
+                    str(model_name),
+                    json.dumps(ai_data, ensure_ascii=False),
+                    now,
+                ),
+            )
+
+    def save_vt_scan_result(self, submission_id: int, vt_result: dict) -> None:
+        """Persist VirusTotal scan telemetry to the vt_scan_result table."""
+        self._check_id(submission_id)
+        if not isinstance(vt_result, dict):
+            return
+        parsed = vt_result.get("parsed_result", vt_result)
+        stats = parsed.get("detection_stats", {})
+        now = datetime.now(timezone.utc).isoformat()
+        with self._get_connection() as connection:
+            self._require_submission(connection, submission_id)
+            connection.execute(
+                """INSERT INTO vt_scan_result (
+                    submission_id, resource_type, resource_identifier,
+                    malicious_count, suspicious_count, harmless_count,
+                    undetected_count, timeout_count, reputation,
+                    raw_vt_response, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(submission_id) DO UPDATE SET
+                    malicious_count = excluded.malicious_count,
+                    suspicious_count = excluded.suspicious_count,
+                    harmless_count = excluded.harmless_count,
+                    undetected_count = excluded.undetected_count,
+                    reputation = excluded.reputation,
+                    raw_vt_response = excluded.raw_vt_response""",
+                (
+                    submission_id,
+                    parsed.get("resource_type", "resource"),
+                    parsed.get("resource_identifier", "unknown"),
+                    stats.get("malicious", 0),
+                    stats.get("suspicious", 0),
+                    stats.get("harmless", 0),
+                    stats.get("undetected", 0),
+                    stats.get("timeout", 0),
+                    parsed.get("reputation", 0),
+                    json.dumps(vt_result, ensure_ascii=False),
+                    now,
+                ),
+            )
 
     def get_submission_report(self, submission_id: int) -> Optional[dict]:
         """Return a formatted report dictionary for an incident."""

@@ -1,17 +1,18 @@
 """Unit tests for Base Classes and Service implementations.
 
 Verifies:
-- Abstract Base Classes (BaseLLMClient, IThreatScanner) enforce interface contracts
+- Abstract Base Class BaseLLMClient enforces interface contract for LLM clients
 - Inheritance and Polymorphism across GeminiClient, GroqClient, and Mock implementations
+- VirusTotalScanner as a standalone concrete service (YAGNI principle applied)
 - Encapsulation of credentials and settings
-- Liskov Substitution Principle (LSP) compliance
+- Liskov Substitution Principle (LSP) compliance for LLM clients
 - Offline execution without requiring live API keys or network
 """
 
 import unittest
 from typing import Any, Dict
 
-from src.interfaces import BaseLLMClient, IThreatScanner
+from src.interfaces import BaseLLMClient
 from src.services import GeminiClient, GroqClient, VirusTotalScanner
 
 
@@ -32,88 +33,81 @@ class MockLLMClient(BaseLLMClient):
         return self.validate_schema(self.canned_response, response_schema)
 
 
-class MockThreatScanner(IThreatScanner):
-    """Mock scanner used to verify IThreatScanner interface contract."""
+class TestBaseLLMClientInterface(unittest.TestCase):
+    """Test BaseLLMClient contract enforcement and ABC mechanics."""
 
-    def scan_resource(self, resource_type: str, resource_identifier: str) -> Dict[str, Any]:
-        return {
-            "resource_type": resource_type,
-            "resource_identifier": resource_identifier,
-            "parsed_result": {
-                "detection_stats": {"malicious": 5, "total": 70, "detection_ratio": 7.14}
-            },
-        }
-
-    def get_report_url(self, resource_type: str, resource_id: str) -> str:
-        return f"https://mockscanner.test/{resource_type}/{resource_id}"
-
-    def is_available(self) -> bool:
-        return True
-
-
-class TestBaseLLMClient(unittest.TestCase):
-    """Test BaseLLMClient contract and abstraction."""
-
-    def test_abc_cannot_be_instantiated(self):
+    def test_abstract_class_cannot_be_instantiated(self):
         with self.assertRaises(TypeError):
             BaseLLMClient(api_key="key", model_name="model")
 
-    def test_mock_client_implements_contract_polymorphically(self):
-        canned = {"classification": "scam", "confidence": "high"}
-        schema = {
-            "type": "object",
-            "properties": {
-                "classification": {"type": "string"},
-                "confidence": {"type": "string"},
-            },
-            "required": ["classification", "confidence"],
-        }
-
+    def test_concrete_mock_satisfies_contract(self):
+        canned = {"threat_detected": True, "score": 85}
         client: BaseLLMClient = MockLLMClient(canned_response=canned)
         self.assertEqual(client.provider_name, "Mock Provider")
         self.assertEqual(client.model_name, "mock-model")
 
-        result = client.generate_structured_analysis("Check this text", schema)
-        self.assertEqual(result["classification"], "scam")
-
-    def test_schema_validation_rejects_missing_fields(self):
-        canned = {"classification": "scam"}  # missing "confidence"
         schema = {
             "type": "object",
             "properties": {
-                "classification": {"type": "string"},
-                "confidence": {"type": "string"},
+                "threat_detected": {"type": "boolean"},
+                "score": {"type": "integer"},
             },
-            "required": ["classification", "confidence"],
+            "required": ["threat_detected", "score"],
         }
-        client = MockLLMClient(canned_response=canned)
+        res = client.generate_structured_analysis("analyze this", schema)
+        self.assertTrue(res["threat_detected"])
+        self.assertEqual(res["score"], 85)
+
+    def test_empty_api_key_raises_value_error(self):
         with self.assertRaises(ValueError):
-            client.generate_structured_analysis("Check text", schema)
+            GeminiClient(api_key="")
+        with self.assertRaises(ValueError):
+            GroqClient(api_key="   ")
 
 
-class TestConcreteLLMClients(unittest.TestCase):
-    """Test GeminiClient and GroqClient inheritance, encapsulation, and properties."""
+class TestGeminiClient(unittest.TestCase):
+    """Test GeminiClient concrete implementation of BaseLLMClient."""
 
-    def test_gemini_client_properties(self):
-        client = GeminiClient(api_key="test_gemini_key", model_name="gemini-3.5-flash")
+    def test_inheritance_and_properties(self):
+        client = GeminiClient(
+            api_key="test_gemini_key",
+            model_name="gemini-2.5-flash",
+            timeout=25,
+        )
         self.assertIsInstance(client, BaseLLMClient)
         self.assertEqual(client.provider_name, "Google Gemini")
-        self.assertEqual(client.model_name, "gemini-3.5-flash")
-        self.assertEqual(client.max_retries, 5)
+        self.assertEqual(client.model_name, "gemini-2.5-flash")
+        self.assertEqual(client.timeout, 25)
 
-    def test_groq_client_properties_and_strict_schema(self):
-        client = GroqClient(api_key="test_groq_key", model_name="openai/gpt-oss-120b")
+    def test_polymorphic_assignment(self):
+        client: BaseLLMClient = GeminiClient(api_key="test_key")
+        self.assertTrue(hasattr(client, "generate_structured_analysis"))
+        self.assertTrue(hasattr(client, "validate_schema"))
+
+
+class TestGroqClient(unittest.TestCase):
+    """Test GroqClient concrete implementation of BaseLLMClient."""
+
+    def test_inheritance_and_properties(self):
+        client = GroqClient(
+            api_key="test_groq_key",
+            model_name="openai/gpt-oss-120b",
+            timeout=40,
+        )
         self.assertIsInstance(client, BaseLLMClient)
         self.assertEqual(client.provider_name, "Groq Cloud")
+        self.assertEqual(client.model_name, "openai/gpt-oss-120b")
+        self.assertEqual(client.timeout, 40)
 
-        # Test Groq strict schema conversion
+    def test_schema_strictness_transformation(self):
+        client = GroqClient(api_key="test_key")
         schema = {
             "type": "object",
             "properties": {
                 "score": {"type": "integer"},
                 "details": {
                     "type": "object",
-                    "properties": {"flag": {"type": "boolean"}},
+                    "properties": {"flag": {"type": "string"}},
                 },
             },
         }
@@ -124,26 +118,11 @@ class TestConcreteLLMClients(unittest.TestCase):
         self.assertIn("flag", strict["properties"]["details"]["required"])
 
 
-class TestIThreatScanner(unittest.TestCase):
-    """Test IThreatScanner interface and VirusTotalScanner implementation."""
-
-    def test_scanner_interface_cannot_be_instantiated(self):
-        with self.assertRaises(TypeError):
-            IThreatScanner()
-
-    def test_mock_threat_scanner_satisfies_interface(self):
-        scanner: IThreatScanner = MockThreatScanner()
-        self.assertTrue(scanner.is_available())
-        res = scanner.scan_resource("url", "https://suspicious.site")
-        self.assertEqual(res["parsed_result"]["detection_stats"]["malicious"], 5)
-        self.assertEqual(
-            scanner.get_report_url("url", "abc"),
-            "https://mockscanner.test/url/abc",
-        )
+class TestVirusTotalScanner(unittest.TestCase):
+    """Test VirusTotalScanner as a standalone concrete service (YAGNI principle)."""
 
     def test_virustotal_scanner_properties_and_hash(self):
         vt = VirusTotalScanner(api_key="test_vt_key")
-        self.assertIsInstance(vt, IThreatScanner)
         self.assertTrue(vt.is_available())
 
         # Test hash validator
@@ -154,6 +133,21 @@ class TestIThreatScanner(unittest.TestCase):
         # Test report URL generator
         url = vt.get_report_url("file", valid_sha256)
         self.assertEqual(url, f"https://www.virustotal.com/gui/file/{valid_sha256}")
+        url_web = vt.get_report_url("url", "some_id")
+        self.assertEqual(url_web, "https://www.virustotal.com/gui/url/some_id")
+
+    def test_scanner_unconfigured_key_returns_error(self):
+        vt_empty = VirusTotalScanner(api_key="")
+        self.assertFalse(vt_empty.is_available())
+        res = vt_empty.scan_resource("url", "https://example.com")
+        self.assertIn("error", res)
+        self.assertEqual(res.get("error_type"), "configuration_error")
+
+    def test_scanner_invalid_resource_type_returns_error(self):
+        vt = VirusTotalScanner(api_key="valid_key")
+        res = vt.scan_resource("invalid_type", "target")
+        self.assertIn("error", res)
+        self.assertEqual(res.get("error_type"), "validation_error")
 
 
 if __name__ == "__main__":
