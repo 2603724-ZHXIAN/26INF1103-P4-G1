@@ -9,7 +9,7 @@ Verifies:
 """
 
 import unittest
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 from unittest.mock import MagicMock, patch
 
 from src.interfaces.llm_client import BaseLLMClient
