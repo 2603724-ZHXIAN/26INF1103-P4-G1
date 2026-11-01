@@ -688,7 +688,7 @@ class DataManager:
                 (
                     submission_id,
                     parsed.get("resource_type", "resource"),
-                    parsed.get("resource_identifier", "unknown"),
+                    parsed.get("resource_identifier") or vt_result.get("resource_identifier", "unknown"),
                     stats.get("malicious", 0),
                     stats.get("suspicious", 0),
                     stats.get("harmless", 0),

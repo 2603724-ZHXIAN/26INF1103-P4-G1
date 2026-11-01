@@ -389,7 +389,7 @@ class TestAIManagerTechnicalAnalysis(unittest.TestCase):
     def setUp(self):
         self.vt_data = {
             "resource_type": "file",
-            "resource_identifier": "abc123",
+            "sha256": "abc123",
             "detection_stats": {"malicious": 6, "suspicious": 1, "harmless": 50, "undetected": 10},
             "threat_names": ["Trojan.Agent"],
             "categories": ["trojan"],
@@ -411,6 +411,7 @@ class TestAIManagerTechnicalAnalysis(unittest.TestCase):
         self.assertIn(DELIMITER_TELEMETRY_END, prompt)
         self.assertIn("Malicious Engines: 6", prompt)
         self.assertIn("Trojan.Agent", prompt)
+        self.assertIn("Resource Identifier: abc123", prompt)
         self.assertIn("scam_confidence", prompt)
 
     def test_schema_requires_ai_decision_fields(self):

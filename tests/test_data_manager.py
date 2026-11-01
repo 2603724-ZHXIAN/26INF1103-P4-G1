@@ -250,6 +250,16 @@ class TechnicalAIAnalysisPersistenceTests(unittest.TestCase):
         report = self.manager.get_submission_report(text_id)
         self.assertIsNone(report["ai_scam_confidence"])
 
+    def test_vt_result_keeps_the_scanned_resource_identifier(self):
+        vt_result = {
+            "resource_identifier": "invoice.exe",
+            "parsed_result": {"resource_type": "file", "detection_stats": {"malicious": 1}},
+        }
+        self.manager.save_vt_scan_result(self.sub_id, vt_result)
+        with sqlite3.connect(self.manager._db_path) as conn:
+            row = conn.execute("SELECT resource_identifier FROM vt_scan_result").fetchone()
+        self.assertEqual(row[0], "invoice.exe")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
