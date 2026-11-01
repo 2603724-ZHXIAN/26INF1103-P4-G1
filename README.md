@@ -1,5 +1,7 @@
 # Cyber Threat & Scam Detection Engine (Phase 2 OOP)
 
+[![CI](https://github.com/2603724-ZHXIAN/26INF1103-P4-G1/actions/workflows/ci.yml/badge.svg)](https://github.com/2603724-ZHXIAN/26INF1103-P4-G1/actions/workflows/ci.yml)
+
 An educational, multi-layered threat detection engine that analyzes suspicious messages (SMS/email phishing), URLs, and file attachments using Google Gemini AI, Groq Cloud failover, VirusTotal v3 telemetry, and deterministic cybersecurity logic rules.
 
 ---
@@ -71,15 +73,55 @@ All commands should be executed from the root project folder:
 python -m src.main
 ```
 
-### Run All Automated Unit Tests (Offline)
-Runs all 198 tests verifying domain models, managers, coordinator routing, the VirusTotal + AI risk rules, failover logic, and services without live API calls:
+### Run All Automated Tests (Offline)
+One command runs the whole suite (199 tests) and prints a pass/fail summary per component:
 ```bash
-python -m unittest discover tests
+python run_tests.py
 ```
+
+| Command | What it does |
+|---|---|
+| `python run_tests.py` | Run every test, then show a summary table per component |
+| `python run_tests.py -v` | Same, but also list every individual test by name |
+| `python run_tests.py logic ai` | Run only the test files whose name contains `logic` or `ai` |
+| `python -m unittest discover tests` | Standard unittest alternative (no summary table) |
+
+The command exits with code `0` when all tests pass and `1` otherwise. **No API keys or internet connection are needed**: AI and VirusTotal responses are replaced by mocks, and every test uses a temporary or in-memory database, so your real `data/database.db` is never modified.
+
+| Test file | Component verified | Key behaviour covered |
+|---|---|---|
+| `tests/test_models.py` | Domain models | Encapsulation and validation, composition of `ThreatEvidence` and `AssessmentResult` inside `Submission`, `to_dict`/`from_dict` round trips |
+| `tests/test_services.py` | Services | `BaseLLMClient` cannot be instantiated (abstract), Gemini/Groq inheritance and polymorphism, VirusTotal hashing and error results |
+| `tests/test_ai_manager.py` | AI Manager | Prompt sandboxing, JSON schema validation, rejection of malformed AI output (e.g. confidence 150), Gemini to Groq failover |
+| `tests/test_oop_logic_manager.py` | Logic Manager | Multi-condition scam rules, exposure routing, VirusTotal thresholds, the VirusTotal + AI rule table and its boundaries |
+| `tests/test_data_manager.py` | Data Manager | Save/load across separate runs, upserts without duplicates, transaction rollback, corrupt or unavailable database file, corrupt stored JSON |
+| `tests/test_io_manager.py` | IO Manager | Encapsulated settings, URL and menu input validation, history/trending queries, result display |
+| `tests/test_coordinator.py` | Engine Coordinator | Full text and URL/file pipelines, AI running before the risk decision, AI/scanner failures marking a record as failed |
 
 ---
 
-## 5. Project Structure & Architecture
+## 5. How a Risk Decision Is Made
+
+Every record passes through the AI before the deterministic rules in `LogicManager` make the final decision. The AI never decides on its own.
+
+**Text messages:** the AI extracts warning indicators (e.g. `credential_request`, `suspicious_link`). Multi-condition rules then combine two or more indicators, for example *credential request + suspicious link = possible credential phishing (high)*.
+
+**URLs and files:** VirusTotal scans the resource, the AI assesses the scan result (`is_malicious`, `scam_confidence` 0-100, `threat_type`, `reasoning`), and `LogicManager` combines both:
+
+| VirusTotal malicious engines | AI says malicious with confidence > 80%? | Result |
+|---|---|---|
+| 5 or more | Yes | **High risk, Urgent priority, `critical_threat` flag** |
+| 5 or more | No | High |
+| 1-4 | Yes | Raised to High |
+| 1-4 | No | Medium |
+| 0 | Yes | Raised to Medium |
+| 0 | No | Low |
+
+A confident AI can raise the risk by one level but never lowers a VirusTotal verdict. If the AI is unavailable or returns invalid output, the record is marked **failed** instead of being assessed without AI.
+
+---
+
+## 6. Project Structure & Architecture
 
 ```text
 26INF1103-P4-G1/
@@ -106,7 +148,9 @@ python -m unittest discover tests
 │       ├── logic_manager.py        # LogicManager (pure deterministic business rules)
 │       ├── data_manager.py         # DataManager (SQLite repository & reports)
 │       └── io_manager.py           # IOManager (terminal UI, formatting, menus)
-├── tests/                          # Automated offline unit test suite (198 tests)
+├── tests/                          # Automated offline test suite (199 tests, one file per component)
+├── .github/workflows/ci.yml        # GitHub Actions CI pipeline
+├── run_tests.py                    # Runs the whole test suite with a summary
 ├── data/                           # SQLite database & synthetic dataset fixtures
 ├── docs/                           # Documentation, rubric details & architecture flowcharts
 ├── load_synthetic_data.py          # Synthetic dataset loader script
@@ -117,24 +161,35 @@ python -m unittest discover tests
 
 ---
 
-## 6. Running with Docker
+## 7. Running with Docker
 
-These commands are for Windows PowerShell. Start Docker Desktop and run them from the main project folder.
+Start Docker Desktop and run these commands from the main project folder. The tests need no `.env` file; the application needs one to call the live APIs.
 
-### 1. Prepare files for analysis
-Create a folder named `test_files` in the root folder:
-```powershell
-New-Item -ItemType Directory -Force test_files
-```
-Place any files you want to analyze inside this folder.
-
-### 2. Build the Docker image
-```powershell
+### 1. Build the Docker image
+```bash
 docker build -f dockerfile -t cyber-threat-engine:latest .
 ```
 
-### 3. Start the application container
-Ensure your `.env` file exists in the root project folder:
+### 2. Run the automated tests in Docker
+```bash
+docker run --rm cyber-threat-engine:latest python run_tests.py
+```
+
+### 3. Prepare files for analysis (optional)
+Create a folder named `test_files` in the root folder and place any files you want to analyse inside it.
+```powershell
+# Windows PowerShell
+New-Item -ItemType Directory -Force test_files
+```
+```bash
+# macOS / Linux
+mkdir -p test_files
+```
+
+### 4. Start the application container
+Ensure your `.env` file exists in the root project folder.
+
+**Windows PowerShell:**
 ```powershell
 docker run --rm -it `
   --mount "type=bind,source=$($PWD.Path)\.env,target=/app/.env,readonly" `
@@ -142,13 +197,29 @@ docker run --rm -it `
   cyber-threat-engine:latest
 ```
 
-### 4. Analyze a file in Docker
+**macOS / Linux:**
+```bash
+docker run --rm -it \
+  --mount "type=bind,source=$(pwd)/.env,target=/app/.env,readonly" \
+  --mount "type=bind,source=$(pwd)/test_files,target=/files,readonly" \
+  cyber-threat-engine:latest
+```
+
+### 5. Analyse a file in Docker
 Select option `[3]` in the menu and enter the container path:
 ```text
 /files/your_file.txt
 ```
 
-### 5. Run automated tests in Docker
-```powershell
-docker run --rm cyber-threat-engine:latest python -m unittest discover tests
-```
+---
+
+## 8. Continuous Integration (CI)
+
+The GitHub Actions workflow [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs automatically on every push to any branch, on every pull request into `main`, and on demand from the **Actions** tab. It has two jobs:
+
+| Job | Steps |
+|---|---|
+| **Unit tests (Python 3.11)** | Check out the code, install `requirements.txt`, run `python run_tests.py -v` |
+| **Docker build + tests in container** | Runs only if the first job passes: builds the image from `dockerfile` and runs `python run_tests.py -v` inside the container |
+
+No secrets are required because every external API is mocked in the tests. The badge at the top of this README shows the latest result on `main`; individual runs and logs are on the repository's **Actions** tab.
