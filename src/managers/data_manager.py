@@ -215,6 +215,26 @@ SCHEMA = """
             ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS technical_ai_analysis (
+        technical_ai_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        submission_id INTEGER NOT NULL UNIQUE,
+        is_malicious INTEGER NOT NULL CHECK (
+            is_malicious IN (0, 1)
+        ),
+        scam_confidence INTEGER NOT NULL CHECK (
+            scam_confidence BETWEEN 0 AND 100
+        ),
+        threat_type TEXT NOT NULL,
+        reasoning TEXT NOT NULL,
+        model_name TEXT NOT NULL,
+        raw_ai_response TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+
+        FOREIGN KEY (submission_id)
+            REFERENCES submission(submission_id)
+            ON DELETE CASCADE
+    );
+
     CREATE INDEX IF NOT EXISTS idx_submission_hash
         ON submission(input_hash);
 
@@ -680,6 +700,38 @@ class DataManager:
                 ),
             )
 
+    def save_technical_analysis(self, submission_id: int, ai_data: dict, model_name: str) -> None:
+        """Persist the AI's URL/file verdict to the technical_ai_analysis table."""
+        self._check_id(submission_id)
+        if not isinstance(ai_data, dict):
+            raise TypeError("ai_data must be a dictionary.")
+        now = datetime.now(timezone.utc).isoformat()
+        with self._get_connection() as connection:
+            self._require_submission(connection, submission_id)
+            connection.execute(
+                """INSERT INTO technical_ai_analysis (
+                    submission_id, is_malicious, scam_confidence, threat_type,
+                    reasoning, model_name, raw_ai_response, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(submission_id) DO UPDATE SET
+                    is_malicious = excluded.is_malicious,
+                    scam_confidence = excluded.scam_confidence,
+                    threat_type = excluded.threat_type,
+                    reasoning = excluded.reasoning,
+                    model_name = excluded.model_name,
+                    raw_ai_response = excluded.raw_ai_response""",
+                (
+                    submission_id,
+                    int(bool(ai_data.get("is_malicious", False))),
+                    ai_data.get("scam_confidence", 0),
+                    str(ai_data.get("threat_type", "unknown")),
+                    str(ai_data.get("reasoning", "")),
+                    str(model_name),
+                    json.dumps(ai_data, ensure_ascii=False),
+                    now,
+                ),
+            )
+
     def get_submission_report(self, submission_id: int) -> Optional[dict]:
         """Return a formatted report dictionary for an incident."""
         self._check_id(submission_id)
@@ -722,11 +774,16 @@ class DataManager:
                     fa.active_indicators,
                     fa.matched_rules,
                     fa.matched_exposures,
-                    fa.exposure_reason
+                    fa.exposure_reason,
+                    tai.is_malicious AS ai_is_malicious,
+                    tai.scam_confidence AS ai_scam_confidence,
+                    tai.threat_type AS ai_threat_type,
+                    tai.reasoning AS ai_reasoning
                 FROM submission AS s
                 LEFT JOIN text_analysis AS ta ON ta.submission_id = s.submission_id
                 LEFT JOIN educational_guidance AS eg ON eg.submission_id = s.submission_id
                 LEFT JOIN final_assessment AS fa ON fa.submission_id = s.submission_id
+                LEFT JOIN technical_ai_analysis AS tai ON tai.submission_id = s.submission_id
                 WHERE s.submission_id = ?""",
                 (submission_id,),
             ).fetchone()

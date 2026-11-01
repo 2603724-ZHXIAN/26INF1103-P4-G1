@@ -5,6 +5,7 @@ doubles so the tests validate routing and state-machine logic only.
 """
 
 import unittest
+import copy
 from unittest.mock import MagicMock, patch
 
 from src.coordinator import EngineCoordinator
@@ -38,6 +39,9 @@ class _MockLLMClient(BaseLLMClient):
         return self._provider_name
 
     def generate_structured_analysis(self, prompt: str, schema: dict) -> dict:
+        # Return a response that matches whichever schema was requested.
+        if "scam_confidence" in schema.get("properties", {}):
+            return copy.deepcopy(_VALID_TECH_AI_RESPONSE)
         return _VALID_AI_RESPONSE
 
 
@@ -119,6 +123,39 @@ _VALID_AI_RESPONSE = {
         "limitations": [],
     },
 }
+
+
+_VALID_TECH_AI_RESPONSE = {
+    "is_malicious": False,
+    "scam_confidence": 5,
+    "threat_type": "none",
+    "reasoning": "No engines flagged the resource.",
+    "education": {
+        "threat_explanations": [],
+        "threat_summary": "No threat detected.",
+        "what_it_is": "This resource appears safe.",
+        "why_dangerous": [],
+        "preventive_steps": [],
+        "recovery_steps": ["No action needed."],
+        "limitations": [],
+    },
+}
+
+
+def _malicious_scan(resource_type: str, resource_value: str) -> dict:
+    """VirusTotal-style result with 6 malicious engines."""
+    return {
+        "parsed_result": {
+            "resource_type": resource_type,
+            "detection_stats": {
+                "malicious": 6, "suspicious": 0, "harmless": 60,
+                "undetected": 6, "timeout": 0, "total": 72,
+            },
+            "threat_names": ["trojan.generic"],
+            "categories": ["trojan"],
+            "reputation": -10,
+        }
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -331,6 +368,82 @@ class TestResourcePipeline(unittest.TestCase):
         self.coord._handle_resource_pipeline(request)
         sub = self.coord._data.get_submission_by_id(1)
         self.assertEqual(sub.processing_status, "failed")
+
+
+class TestResourcePipelineAIIntegration(unittest.TestCase):
+    """Every URL/file record must pass through the AI, and the AI must affect the decision."""
+
+    def setUp(self):
+        self.coord = _make_coordinator()
+        self.coord._io._print = lambda *a, **kw: None
+        self.coord._io.display_assessment = lambda *a, **kw: None
+        self.request = {
+            "action": "analyze_submission",
+            "input_type": "file",
+            "input_value": "invoice.exe",
+            "input_hash": "file900",
+            "interaction_type": "viewed_only",
+            "interaction_description": None,
+            "file_path": "/tmp/invoice.exe",
+        }
+
+    def test_ai_failure_marks_submission_failed_and_skips_logic(self):
+        self.coord._ai.analyze_technical_threat = MagicMock(
+            return_value={"error": "Gemini request timed out."}
+        )
+        self.coord._logic.evaluate_technical_threat = MagicMock()
+        self.coord._handle_resource_pipeline(self.request)
+        sub = self.coord._data.get_submission_by_id(1)
+        self.assertEqual(sub.processing_status, "failed")
+        self.assertIn("timed out", sub.error_message)
+        self.coord._logic.evaluate_technical_threat.assert_not_called()
+
+    def test_ai_is_called_before_logic_and_result_is_passed_in(self):
+        order = []
+        real_ai = self.coord._ai.analyze_technical_threat
+        real_logic = self.coord._logic.evaluate_technical_threat
+
+        def ai_spy(**kwargs):
+            order.append("ai")
+            return real_ai(**kwargs)
+
+        def logic_spy(submission, vt_data, ai_data, *args):
+            order.append("logic")
+            self.assertIn("scam_confidence", ai_data)
+            return real_logic(submission, vt_data, ai_data, *args)
+
+        self.coord._ai.analyze_technical_threat = ai_spy
+        self.coord._logic.evaluate_technical_threat = logic_spy
+        self.coord._handle_resource_pipeline(self.request)
+        self.assertEqual(order, ["ai", "logic"])
+        self.assertEqual(self.coord._data.get_submission_by_id(1).processing_status, "completed")
+
+    def test_critical_threat_is_urgent_and_ai_verdict_is_persisted(self):
+        self.coord._scanner.scan_resource = _malicious_scan
+        confident = copy.deepcopy(_VALID_TECH_AI_RESPONSE)
+        confident.update(is_malicious=True, scam_confidence=95, threat_type="trojan",
+                         reasoning="Six engines report a trojan.")
+        self.coord._ai.analyze_technical_threat = MagicMock(return_value=confident)
+        self.coord._handle_resource_pipeline(self.request)
+
+        report = self.coord._data.get_submission_report(1)
+        self.assertEqual(report["processing_status"], "completed")
+        self.assertEqual(report["overall_risk"], "high")
+        self.assertEqual(report["priority"], "urgent")
+        self.assertIn("critical_threat", report["flags"])
+        self.assertEqual(report["ai_scam_confidence"], 95)
+        self.assertEqual(report["ai_threat_type"], "trojan")
+
+    def test_same_scan_with_low_ai_confidence_is_not_urgent(self):
+        self.coord._scanner.scan_resource = _malicious_scan
+        unsure = copy.deepcopy(_VALID_TECH_AI_RESPONSE)
+        unsure.update(is_malicious=True, scam_confidence=60)
+        self.coord._ai.analyze_technical_threat = MagicMock(return_value=unsure)
+        self.coord._handle_resource_pipeline(self.request)
+        report = self.coord._data.get_submission_report(1)
+        self.assertEqual(report["overall_risk"], "high")
+        self.assertNotEqual(report["priority"], "urgent")
+        self.assertNotIn("critical_threat", report["flags"])
 
 
 class TestThreatRadarPipeline(unittest.TestCase):

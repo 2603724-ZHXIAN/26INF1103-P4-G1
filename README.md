@@ -72,7 +72,7 @@ python -m src.main
 ```
 
 ### Run All Automated Unit Tests (Offline)
-Runs all 173 tests verifying domain models, managers, coordinator routing, failover logic, and services without live API calls:
+Runs all 198 tests verifying domain models, managers, coordinator routing, the VirusTotal + AI risk rules, failover logic, and services without live API calls:
 ```bash
 python -m unittest discover tests
 ```
@@ -106,7 +106,7 @@ python -m unittest discover tests
 │       ├── logic_manager.py        # LogicManager (pure deterministic business rules)
 │       ├── data_manager.py         # DataManager (SQLite repository & reports)
 │       └── io_manager.py           # IOManager (terminal UI, formatting, menus)
-├── tests/                          # Automated offline unit test suite (173 tests)
+├── tests/                          # Automated offline unit test suite (198 tests)
 ├── data/                           # SQLite database & synthetic dataset fixtures
 ├── docs/                           # Documentation, rubric details & architecture flowcharts
 ├── load_synthetic_data.py          # Synthetic dataset loader script

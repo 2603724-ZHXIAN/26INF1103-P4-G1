@@ -237,13 +237,17 @@ class EngineCoordinator:
         Steps:
         1. Create Submission and persist as pending.
         2. Transition to processing.
-        3. Call IThreatScanner.scan_resource() (Polymorphism via interface).
+        3. Call VirusTotalScanner.scan_resource().
         4. On scanner error → mark failed, persist, display error, return.
-        5. Call LogicManager.evaluate_technical_threat() on parsed VT result.
-        6. If AIManager is available: call generate_education() for guidance.
-        7. Persist assessment and evidence via DataManager.
-        8. Mark completed and persist.
-        9. Display result via IOManager.display_assessment().
+        5. Extract technical evidence from VirusTotal findings.
+        6. Call AIManager.analyze_technical_threat() on the parsed VT result.
+           Every URL/file record must pass through the AI: on AI error → mark
+           failed, persist, display error, return.
+        7. Call LogicManager.evaluate_technical_threat() with BOTH the VT result
+           and the AI result, so the AI verdict influences the risk decision.
+        8. Attach the AI's educational guidance to the assessment.
+        9. Persist assessment, evidence, VT telemetry and AI analysis.
+        10. Mark completed, persist, and display via IOManager.display_assessment().
         """
         input_type = request.get("input_type", "url")
         input_value = request.get("input_value", "")
@@ -314,9 +318,28 @@ class EngineCoordinator:
                 severity="high",
             )
 
-        # Step 6: Business rule evaluation using VT data
+        # Step 6: AI technical analysis (mandatory; runs BEFORE the risk decision)
+        LOGGER.info("Sending submission #%d to AIManager for technical analysis.", submission_id)
+        ai_result = self._ai.analyze_technical_threat(
+            vt_data=parsed_result,
+            interaction=interaction_type,
+            interaction_description=interaction_description,
+        )
+        if not isinstance(ai_result, dict) or "error" in ai_result:
+            error_msg = (
+                ai_result.get("error", "Unknown AI error.")
+                if isinstance(ai_result, dict)
+                else "AI returned an invalid response."
+            )
+            LOGGER.error("AIManager failed for submission #%d: %s", submission_id, error_msg)
+            submission.mark_failed(error_msg)
+            self._safe_update_submission(submission)
+            self._io._print(f"\n[AI Analysis] Analysis failed: {error_msg}")
+            return
+
+        # Step 7: Business rule evaluation using VT data AND the AI verdict
         try:
-            assessment = self._logic.evaluate_technical_threat(submission, parsed_result)
+            assessment = self._logic.evaluate_technical_threat(submission, parsed_result, ai_result)
         except (TypeError, ValueError) as logic_err:
             LOGGER.error("LogicManager failed for submission #%d: %s", submission_id, logic_err)
             submission.mark_failed(str(logic_err))
@@ -324,43 +347,31 @@ class EngineCoordinator:
             self._io._print(f"\n[Risk Analysis] Risk evaluation failed: {logic_err}")
             return
 
-        # Step 7: AI-generated educational guidance (best-effort; never fails the pipeline)
-        model_name = self._get_model_name()
-        try:
-            education_result = self._ai.generate_education(
-                vt_data=parsed_result,
-                risk_data=assessment.to_dict(),
-                interaction=interaction_type,
-                interaction_description=interaction_description,
-            )
-            if isinstance(education_result, dict) and "error" not in education_result:
-                assessment.attach_educational_guidance(
-                    what_it_is=education_result.get("what_it_is"),
-                    threat_summary=education_result.get("threat_summary"),
-                    recovery_steps=education_result.get("recovery_steps"),
-                )
-        except Exception as ai_err:
-            LOGGER.warning(
-                "AI education failed for submission #%d (non-fatal): %s",
-                submission_id,
-                ai_err,
+        # Step 8: Attach the AI's educational guidance from the same response
+        education = ai_result.get("education", {})
+        if isinstance(education, dict):
+            assessment.attach_educational_guidance(
+                what_it_is=education.get("what_it_is"),
+                threat_summary=education.get("threat_summary"),
+                recovery_steps=education.get("recovery_steps"),
             )
 
-        # Step 8: Persist assessment, evidence, and scanner telemetry
+        # Step 9: Persist assessment, evidence, scanner telemetry and AI analysis
+        model_name = self._get_model_name()
         try:
             self._data.save_assessment(submission_id, assessment, model_name)
             self._data.save_evidences(submission_id, submission.evidences)
             self._data.save_vt_scan_result(submission_id, vt_result)
+            self._data.save_technical_analysis(submission_id, ai_result, model_name)
         except DataManagerError as db_err:
             LOGGER.error("Failed to persist assessment for submission #%d: %s", submission_id, db_err)
             self._io._print(f"\n[Database] Results could not be saved: {db_err}")
 
-        # Step 9: Mark completed and persist
+        # Step 10: Mark completed, persist and display
         submission.mark_completed()
         self._safe_update_submission(submission)
         LOGGER.info("Submission #%d (resource) completed successfully.", submission_id)
 
-        # Step 10: Display result
         self._io.display_assessment(submission)
 
     # -------------------------------------------------------------------------

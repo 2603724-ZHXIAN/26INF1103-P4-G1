@@ -382,6 +382,14 @@ def make_vt(malicious=0, suspicious=0, harmless=0, undetected=100, timeout=0, re
     }
 
 
+def make_ai(confidence=10, is_malicious=False, threat_type="none", reasoning="No strong signs."):
+    """Return a valid AI technical analysis. Defaults are neutral (no escalation)."""
+    return {
+        "is_malicious": is_malicious, "scam_confidence": confidence,
+        "threat_type": threat_type, "reasoning": reasoning,
+    }
+
+
 class LogicManagerTechnicalEvidenceTests(unittest.TestCase):
     def setUp(self):
         self.manager = LogicManager()
@@ -482,7 +490,7 @@ class LogicManagerTechnicalAssessmentTests(unittest.TestCase):
             for action, exposure, level, overall, route in actions:
                 with self.subTest(kind=kind, action=action):
                     sub = Submission(kind, "example.test" if kind == "url" else "sample.pdf", action)
-                    result = self.manager.evaluate_technical_threat(sub, make_vt(suspicious=2), exposure)
+                    result = self.manager.evaluate_technical_threat(sub, make_vt(suspicious=2), make_ai(), exposure)
                     self.assertIsInstance(result, AssessmentResult)
                     self.assertIs(sub.assessment, result)
                     self.assertEqual(result.message_risk, "medium")
@@ -495,7 +503,7 @@ class LogicManagerTechnicalAssessmentTests(unittest.TestCase):
         sub = Submission("file", "suspicious.exe", submission_id=21)
         data = make_vt(malicious=5)
         data["threat_names"] = ["trojan"]
-        result = self.manager.evaluate_technical_threat(sub, data)
+        result = self.manager.evaluate_technical_threat(sub, data, make_ai())
         self.assertEqual(result.overall_risk, "high")
         self.assertTrue(result.is_scam)
         self.assertEqual(result.flags, ["trojan"])
@@ -506,50 +514,135 @@ class LogicManagerTechnicalAssessmentTests(unittest.TestCase):
 
     def test_low_technical_risk_with_payment_preserves_existing_rule(self):
         result = self.manager.evaluate_technical_threat(
-            Submission("url", "example.test", "made_payment_or_shared_banking_details"), make_vt()
+            Submission("url", "example.test", "made_payment_or_shared_banking_details"), make_vt(), make_ai()
         )
         self.assertEqual(result.overall_risk, "low")
         self.assertEqual(result.exposure_level, "high")
         self.assertEqual(result.route, "general_safety_education")
 
     def test_other_without_interpretation_has_explicit_unknown_explanation(self):
-        result = self.manager.evaluate_technical_threat(Submission("url", "example.test", "other"), make_vt(suspicious=2))
+        result = self.manager.evaluate_technical_threat(Submission("url", "example.test", "other"), make_vt(suspicious=2), make_ai())
         self.assertEqual(result.exposure_level, "medium")
         self.assertIn("unconfirmed", result.exposure_reason)
 
     def test_invalid_evidence_preserves_prior_assessment(self):
         sub = Submission("url", "example.test")
-        prior = self.manager.evaluate_technical_threat(sub, make_vt())
+        prior = self.manager.evaluate_technical_threat(sub, make_vt(), make_ai())
         for data in ({"error": "Unavailable"}, make_vt(undetected=0, timeout=10), make_vt(malicious=-1)):
             with self.subTest(data=data), self.assertRaises(ValueError):
                 try:
-                    self.manager.evaluate_technical_threat(sub, data)
+                    self.manager.evaluate_technical_threat(sub, data, make_ai())
                 finally:
                     self.assertIs(sub.assessment, prior)
 
     def test_text_submission_is_rejected_by_technical_pipeline(self):
         sub = Submission("text", "Hello")
         with self.assertRaises(ValueError):
-            self.manager.evaluate_technical_threat(sub, make_vt())
+            self.manager.evaluate_technical_threat(sub, make_vt(), make_ai())
         self.assertIsNone(sub.assessment)
 
     def test_custom_exposure_requires_valid_boolean_flags(self):
         for exposure in ("clicked", {"shared_otp": "false"}):
             with self.subTest(exposure=exposure), self.assertRaises(ValueError):
-                self.manager.evaluate_technical_threat(Submission("url", "example.test", "other"), make_vt(), exposure)
+                self.manager.evaluate_technical_threat(Submission("url", "example.test", "other"), make_vt(), make_ai(), exposure)
 
     def test_input_findings_and_exposure_are_not_modified(self):
         data = make_vt(malicious=5)
         exposure = {"granted_remote_access": True}
         before = copy.deepcopy((data, exposure))
-        self.manager.evaluate_technical_threat(Submission("file", "sample.exe", "other"), data, exposure)
+        self.manager.evaluate_technical_threat(Submission("file", "sample.exe", "other"), data, make_ai(), exposure)
         self.assertEqual((data, exposure), before)
 
     def test_domain_result_serialization_preserves_reasons_and_routes(self):
         sub = Submission("url", "example.test", "entered_information")
-        result = self.manager.evaluate_technical_threat(sub, make_vt(malicious=5))
+        result = self.manager.evaluate_technical_threat(sub, make_vt(malicious=5), make_ai())
         restored = Submission.from_dict(sub.to_dict())
         self.assertEqual(restored.assessment.to_dict(), result.to_dict())
+
+
+class LogicManagerAITechnicalRuleTests(unittest.TestCase):
+    """VirusTotal + AI multi-condition rules for URL/file submissions."""
+
+    def setUp(self):
+        self.manager = LogicManager()
+
+    def evaluate(self, malicious, confidence, is_malicious=True):
+        sub = Submission("file", "sample.exe", "viewed_only")
+        return self.manager.evaluate_technical_threat(
+            sub, make_vt(malicious=malicious), make_ai(confidence, is_malicious, "trojan")
+        )
+
+    def test_rule_table(self):
+        # (VT malicious, AI confidence, expected technical risk, critical?)
+        cases = [
+            (5, 81, "high", True),     # both conditions met -> critical
+            (5, 80, "high", False),    # exactly 80 is NOT above the threshold
+            (4, 95, "high", False),    # 1-4 engines + confident AI -> raised to high
+            (4, 80, "medium", False),  # 1-4 engines, AI not confident -> VT verdict
+            (0, 95, "medium", False),  # no engines + confident AI -> raised to medium
+            (0, 50, "low", False),     # no engines, AI not confident -> low
+        ]
+        for malicious, confidence, risk, critical in cases:
+            with self.subTest(malicious=malicious, confidence=confidence):
+                result = self.evaluate(malicious, confidence)
+                self.assertEqual(result.message_risk, risk)
+                self.assertEqual("critical_threat" in result.flags, critical)
+                self.assertEqual(result.priority == "urgent", critical)
+
+    def test_critical_rule_is_recorded_with_reason(self):
+        result = self.evaluate(7, 99)
+        rules = [rule["rule"] for rule in result.matched_rules]
+        self.assertIn("critical_vt_ai_consensus_rule", rules)
+        self.assertEqual(result.decision, "flag")
+        self.assertTrue(any("99% confident" in reason for reason in result.risk_reasons))
+
+    def test_escalation_rule_is_recorded(self):
+        result = self.evaluate(0, 90)
+        rules = [rule["rule"] for rule in result.matched_rules]
+        self.assertIn("ai_confidence_escalation_rule", rules)
+
+    def test_confident_but_not_malicious_ai_does_not_escalate(self):
+        result = self.evaluate(0, 99, is_malicious=False)
+        self.assertEqual(result.message_risk, "low")
+
+    def test_ai_never_lowers_virustotal_verdict(self):
+        result = self.evaluate(10, 0, is_malicious=False)
+        self.assertEqual(result.message_risk, "high")
+        self.assertTrue(result.is_scam)
+
+    def test_ai_reasoning_is_included_in_reasons(self):
+        sub = Submission("url", "example.test")
+        result = self.manager.evaluate_technical_threat(
+            sub, make_vt(), make_ai(20, False, "none", "Clean reputation.")
+        )
+        self.assertIn("AI reasoning: Clean reputation.", result.risk_reasons)
+
+    def test_invalid_ai_data_is_rejected_and_keeps_prior_assessment(self):
+        sub = Submission("url", "example.test")
+        prior = self.manager.evaluate_technical_threat(sub, make_vt(), make_ai())
+        invalid = [
+            None,
+            {"error": "AI unavailable"},
+            make_ai(confidence=150),
+            make_ai(confidence=-5),
+            make_ai(confidence="high"),
+            make_ai(confidence=True),
+            {**make_ai(), "is_malicious": "yes"},
+            {**make_ai(), "threat_type": ""},
+            {k: v for k, v in make_ai().items() if k != "scam_confidence"},
+        ]
+        for ai_data in invalid:
+            with self.subTest(ai_data=ai_data), self.assertRaises(ValueError):
+                try:
+                    self.manager.evaluate_technical_threat(sub, make_vt(), ai_data)
+                finally:
+                    self.assertIs(sub.assessment, prior)
+
+    def test_ai_input_is_not_modified(self):
+        ai_data = make_ai(95, True, "trojan")
+        before = copy.deepcopy(ai_data)
+        self.manager.evaluate_technical_threat(Submission("file", "a.exe"), make_vt(malicious=6), ai_data)
+        self.assertEqual(ai_data, before)
 
 
 if __name__ == "__main__":

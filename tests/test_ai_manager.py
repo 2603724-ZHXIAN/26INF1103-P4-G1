@@ -363,6 +363,94 @@ class TestAIManagerAutomatedFailover(unittest.TestCase):
         self.assertIn("error", result)
 
 
+def _valid_technical_response(**overrides) -> Dict[str, Any]:
+    response = {
+        "is_malicious": True,
+        "scam_confidence": 92,
+        "threat_type": "trojan",
+        "reasoning": "Several engines report a trojan.",
+        "education": {
+            "threat_explanations": [],
+            "threat_summary": "A trojan was detected.",
+            "what_it_is": "A trojan hides malware inside a normal-looking file.",
+            "why_dangerous": [],
+            "preventive_steps": [],
+            "recovery_steps": ["Delete the file.", "Run a full antivirus scan."],
+            "limitations": [],
+        },
+    }
+    response.update(overrides)
+    return response
+
+
+class TestAIManagerTechnicalAnalysis(unittest.TestCase):
+    """Test analyze_technical_threat for the URL/file pipeline."""
+
+    def setUp(self):
+        self.vt_data = {
+            "resource_type": "file",
+            "resource_identifier": "abc123",
+            "detection_stats": {"malicious": 6, "suspicious": 1, "harmless": 50, "undetected": 10},
+            "threat_names": ["Trojan.Agent"],
+            "categories": ["trojan"],
+            "reputation": -15,
+        }
+
+    def test_valid_response_is_returned(self):
+        client = MockTestLLMClient(canned_response=_valid_technical_response())
+        result = AIManager(llm_client=client).analyze_technical_threat(self.vt_data, "viewed_only")
+        self.assertNotIn("error", result)
+        self.assertEqual(result["scam_confidence"], 92)
+        self.assertTrue(result["is_malicious"])
+
+    def test_prompt_sandboxes_telemetry_and_includes_counts(self):
+        client = MockTestLLMClient(canned_response=_valid_technical_response())
+        AIManager(llm_client=client).analyze_technical_threat(self.vt_data, "opened_or_downloaded_file")
+        prompt = client.last_prompt
+        self.assertIn(DELIMITER_TELEMETRY_START, prompt)
+        self.assertIn(DELIMITER_TELEMETRY_END, prompt)
+        self.assertIn("Malicious Engines: 6", prompt)
+        self.assertIn("Trojan.Agent", prompt)
+        self.assertIn("scam_confidence", prompt)
+
+    def test_schema_requires_ai_decision_fields(self):
+        schema = AIManager._build_technical_analysis_schema()
+        for field in ("is_malicious", "scam_confidence", "threat_type", "reasoning", "education"):
+            self.assertIn(field, schema["required"])
+        self.assertEqual(schema["properties"]["scam_confidence"]["type"], "integer")
+
+    def test_out_of_range_or_wrong_type_confidence_is_rejected(self):
+        for bad in (150, -1, "high", 85.5, True):
+            with self.subTest(confidence=bad):
+                client = MockTestLLMClient(canned_response=_valid_technical_response(scam_confidence=bad))
+                result = AIManager(llm_client=client).analyze_technical_threat(self.vt_data)
+                self.assertIn("error", result)
+
+    def test_non_boolean_is_malicious_is_rejected(self):
+        client = MockTestLLMClient(canned_response=_valid_technical_response(is_malicious="yes"))
+        result = AIManager(llm_client=client).analyze_technical_threat(self.vt_data)
+        self.assertIn("error", result)
+
+    def test_empty_vt_data_returns_error_without_calling_llm(self):
+        client = MockTestLLMClient(canned_response=_valid_technical_response())
+        result = AIManager(llm_client=client).analyze_technical_threat({})
+        self.assertIn("error", result)
+        self.assertEqual(client.call_count, 0)
+
+    def test_failover_is_used_for_technical_analysis(self):
+        primary = MockTestLLMClient(provider="Gemini", should_fail=True)
+        fallback = MockTestLLMClient(provider="Groq", canned_response=_valid_technical_response())
+        result = AIManager(llm_client=primary, fallback_client=fallback).analyze_technical_threat(self.vt_data)
+        self.assertNotIn("error", result)
+        self.assertEqual(fallback.call_count, 1)
+
+    def test_both_providers_failing_returns_error(self):
+        primary = MockTestLLMClient(provider="Gemini", raise_exception=True)
+        fallback = MockTestLLMClient(provider="Groq", should_fail=True)
+        result = AIManager(llm_client=primary, fallback_client=fallback).analyze_technical_threat(self.vt_data)
+        self.assertIn("error", result)
+
+
 class TestAIManagerThreatRadar(unittest.TestCase):
     """Test fetch_emerging_radar delegation and fallback."""
 
