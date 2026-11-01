@@ -35,7 +35,7 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run automated tests
-        run: python -m unittest discover -s tests -v
+        run: python run_tests.py -v
 
   docker-tests:
     name: Docker build + tests in container
@@ -49,4 +49,4 @@ jobs:
         run: docker build -f dockerfile -t cyber-threat-engine:ci .
 
       - name: Run tests inside the container
-        run: docker run --rm cyber-threat-engine:ci python -m unittest discover -s tests -v
+        run: docker run --rm cyber-threat-engine:ci python run_tests.py -v
