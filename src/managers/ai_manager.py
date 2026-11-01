@@ -227,7 +227,7 @@ class AIManager:
 
         technical_summary = (
             f"Resource Type: {vt_data.get('resource_type', 'resource')}\n"
-            f"Resource Identifier: {vt_data.get('resource_identifier', 'unknown')}\n"
+            f"Resource Identifier: {vt_data.get('resource_identifier') or vt_data.get('url') or vt_data.get('sha256') or 'unknown'}\n"
             f"Malicious Engines: {stats.get('malicious', 0)}\n"
             f"Suspicious Engines: {stats.get('suspicious', 0)}\n"
             f"Harmless Engines: {stats.get('harmless', 0)}\n"
