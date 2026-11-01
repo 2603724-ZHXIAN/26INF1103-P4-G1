@@ -202,5 +202,54 @@ class DataManagerTests(unittest.TestCase):
         self.assertEqual(len(self.manager.get_records_by_risk_level("high")), 1)
 
 
+class TechnicalAIAnalysisPersistenceTests(unittest.TestCase):
+    """Persistence of the AI verdict for URL/file submissions."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.manager = DataManager(str(Path(self.temp.name) / "tech.db"))
+        self.manager.initialize_database()
+        self.sub_id = self.manager.save_submission(Submission("file", "invoice.exe"))
+        self.ai_data = {
+            "is_malicious": True, "scam_confidence": 91,
+            "threat_type": "trojan", "reasoning": "Six engines agree.",
+        }
+
+    def tearDown(self):
+        self.manager.close()
+        self.temp.cleanup()
+
+    def test_ai_verdict_survives_a_new_manager_instance(self):
+        self.manager.save_technical_analysis(self.sub_id, self.ai_data, "gemini-test")
+        reloaded = DataManager(self.manager._db_path)  # simulates a separate run
+        report = reloaded.get_submission_report(self.sub_id)
+        self.assertEqual(report["ai_scam_confidence"], 91)
+        self.assertEqual(report["ai_is_malicious"], 1)
+        self.assertEqual(report["ai_threat_type"], "trojan")
+        self.assertEqual(report["ai_reasoning"], "Six engines agree.")
+
+    def test_saving_twice_updates_instead_of_duplicating(self):
+        self.manager.save_technical_analysis(self.sub_id, self.ai_data, "m")
+        self.manager.save_technical_analysis(self.sub_id, {**self.ai_data, "scam_confidence": 40}, "m")
+        with sqlite3.connect(self.manager._db_path) as conn:
+            rows = conn.execute("SELECT scam_confidence FROM technical_ai_analysis").fetchall()
+        self.assertEqual(rows, [(40,)])
+
+    def test_out_of_range_confidence_is_rejected_by_database(self):
+        with self.assertRaises(DataManagerError):
+            self.manager.save_technical_analysis(self.sub_id, {**self.ai_data, "scam_confidence": 150}, "m")
+
+    def test_unknown_submission_and_bad_input_are_rejected(self):
+        with self.assertRaises(ValueError):
+            self.manager.save_technical_analysis(9999, self.ai_data, "m")
+        with self.assertRaises(TypeError):
+            self.manager.save_technical_analysis(self.sub_id, "not a dict", "m")
+
+    def test_text_records_report_without_ai_technical_fields(self):
+        text_id = self.manager.save_submission(Submission("text", "hello"))
+        report = self.manager.get_submission_report(text_id)
+        self.assertIsNone(report["ai_scam_confidence"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
