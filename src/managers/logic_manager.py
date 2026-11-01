@@ -16,7 +16,12 @@ class LogicManager:
         self._technical_thresholds = {
             "high_malicious": 5, "high_ratio": 10, "high_negative_reputation": -20,
             "medium_malicious": 1, "medium_suspicious": 2, "medium_ratio": 3,
+            # Phase 1 multi-condition rule: VirusTotal engines AND AI confidence.
+            "critical_malicious": 5, "ai_high_confidence": 80,
         }
+        # A confident AI verdict may raise the technical risk by one level.
+        # It never lowers a VirusTotal verdict (safety-first design).
+        self._ai_escalation = {"low": "medium", "medium": "high", "high": "high"}
         # Each instance owns its rule collections; no shared mutable tables.
         self._known_indicators = {'authority_impersonation',
          'credential_request',
@@ -374,6 +379,7 @@ class LogicManager:
             labels.extend(item.strip() for item in values if item.strip())
         return {
             "technical_risk": risk,
+            "malicious_count": counts["malicious"],
             "detection_ratio": round(ratio, 2),
             "flags": sorted(set(labels)),
             "risk_reasons": [
@@ -384,13 +390,88 @@ class LogicManager:
             ],
         }
 
+    @staticmethod
+    def _validate_technical_ai(ai_data) -> dict:
+        """Validate the AI technical analysis before any field is used."""
+        if not isinstance(ai_data, dict) or "error" in ai_data:
+            raise ValueError("A successful AI technical analysis is required.")
+        confidence = ai_data.get("scam_confidence")
+        if type(confidence) is not int or not 0 <= confidence <= 100:
+            raise ValueError("AI scam_confidence must be an integer between 0 and 100.")
+        is_malicious = ai_data.get("is_malicious")
+        if not isinstance(is_malicious, bool):
+            raise ValueError("AI is_malicious must be a boolean.")
+        threat_type = ai_data.get("threat_type")
+        if not isinstance(threat_type, str) or not threat_type.strip():
+            raise ValueError("AI threat_type must be a non-empty string.")
+        reasoning = ai_data.get("reasoning", "")
+        return {
+            "confidence": confidence,
+            "is_malicious": is_malicious,
+            "threat_type": threat_type.strip(),
+            "reasoning": reasoning.strip() if isinstance(reasoning, str) else "",
+        }
+
+    def _apply_ai_technical_rules(self, vt_risk: str, malicious_count: int, ai: dict) -> dict:
+        """Combine the VirusTotal verdict with the AI verdict.
+
+        Rules (thresholds in self._technical_thresholds):
+        1. critical_vt_ai_consensus_rule: malicious engines >= 5 AND the AI says
+           malicious with confidence > 80  ->  high risk, urgent priority,
+           'critical_threat' flag.
+        2. ai_confidence_escalation_rule: the AI says malicious with confidence
+           > 80 but rule 1 does not apply  ->  technical risk raised one level.
+        3. Otherwise the VirusTotal verdict stands. The AI never lowers it.
+        """
+        thresholds = self._technical_thresholds
+        ai_confident = ai["is_malicious"] and ai["confidence"] > thresholds["ai_high_confidence"]
+        verdict = "malicious" if ai["is_malicious"] else "not malicious"
+        reasons = [
+            f"AI assessment: {verdict} ({ai['threat_type']}) with "
+            f"{ai['confidence']}% confidence."
+        ]
+        if ai["reasoning"]:
+            reasons.append(f"AI reasoning: {ai['reasoning']}")
+
+        if malicious_count >= thresholds["critical_malicious"] and ai_confident:
+            reason = (
+                f"{malicious_count} engines flagged the item and the AI is "
+                f"{ai['confidence']}% confident it is malicious: critical threat."
+            )
+            return {
+                "risk": "high",
+                "critical": True,
+                "rule": {"rule": "critical_vt_ai_consensus_rule", "risk_level": "high", "reason": reason},
+                "reasons": reasons + [reason],
+            }
+
+        if ai_confident and vt_risk != "high":
+            escalated = self._ai_escalation[vt_risk]
+            reason = (
+                f"The AI is {ai['confidence']}% confident the item is malicious, so the "
+                f"technical risk was raised from {vt_risk} to {escalated}."
+            )
+            return {
+                "risk": escalated,
+                "critical": False,
+                "rule": {"rule": "ai_confidence_escalation_rule", "risk_level": escalated, "reason": reason},
+                "reasons": reasons + [reason],
+            }
+
+        return {"risk": vt_risk, "critical": False, "rule": None, "reasons": reasons}
+
     def evaluate_technical_threat(
         self,
         submission: Submission,
         vt_data: dict,
+        ai_data: dict,
         interpreted_exposure: Optional[dict] = None,
     ) -> AssessmentResult:
-        """Evaluate parsed URL/file findings without calling a scanning service."""
+        """Evaluate URL/file findings from VirusTotal AND the AI technical analysis.
+
+        Both inputs are required: the AI verdict influences the final decision
+        through _apply_ai_technical_rules().
+        """
         self._validate_submission(submission, {"url", "file"})
         if submission.interaction_type == "other" and interpreted_exposure is not None:
             if not isinstance(interpreted_exposure, dict):
@@ -399,7 +480,11 @@ class LogicManager:
                 if name in interpreted_exposure and not isinstance(interpreted_exposure[name], bool):
                     raise ValueError("Interpreted exposure flags must be booleans.")
         technical = self._evaluate_technical_evidence(vt_data)
-        source_risk = technical["technical_risk"]
+        ai = self._validate_technical_ai(ai_data)
+        ai_outcome = self._apply_ai_technical_rules(
+            technical["technical_risk"], technical["malicious_count"], ai
+        )
+        source_risk = ai_outcome["risk"]
         exposure = self._determine_user_exposure(
             submission.interaction_type, interpreted_exposure
         )
@@ -414,6 +499,14 @@ class LogicManager:
             overall_risk, submission.interaction_type,
             interpreted_exposure or {}, [], source_risk
         )
+        flags = list(technical["flags"])
+        matched_rules = [{"rule": "virustotal_engine_threshold", "risk_level": technical["technical_risk"]}]
+        if ai_outcome["rule"] is not None:
+            matched_rules.append(ai_outcome["rule"])
+        if ai_outcome["critical"]:
+            # Critical threats are always flagged and handled with urgent priority.
+            route = dict(route, decision="flag", priority="urgent")
+            flags.append("critical_threat")
         result = {
             "is_scam": source_risk == "high",
             "risk_score": None,
@@ -425,10 +518,10 @@ class LogicManager:
             "route": route["route"],
             "priority": route["priority"],
             "recommended_action": route["recommended_action"],
-            "flags": technical["flags"],
-            "active_indicators": list(technical["flags"]),
-            "risk_reasons": technical["risk_reasons"] + [exposure["reason"]],
-            "matched_rules": [{"rule": "virustotal_engine_threshold", "risk_level": source_risk}],
+            "flags": flags,
+            "active_indicators": list(flags),
+            "risk_reasons": technical["risk_reasons"] + ai_outcome["reasons"] + [exposure["reason"]],
+            "matched_rules": matched_rules,
             "matched_exposures": exposure["matched_exposures"],
             "exposure_reason": exposure["reason"],
         }
