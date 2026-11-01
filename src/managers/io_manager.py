@@ -686,6 +686,7 @@ class IOManager:
         recovery_steps: List[str] = []
         flags: List[str] = []
         report_url: Optional[str] = None
+        priority = ""
 
         if isinstance(assessment_or_submission, Submission):
             sub = assessment_or_submission
@@ -699,6 +700,7 @@ class IOManager:
                 reported_action = ar.exposure_reason or reported_action
                 recovery_steps = ar.recovery_steps
                 flags = ar.risk_reasons or ar.flags
+                priority = ar.priority
             else:
                 threat_status = sub.processing_status.upper()
 
@@ -710,6 +712,7 @@ class IOManager:
             reported_action = ar.exposure_reason
             recovery_steps = ar.recovery_steps
             flags = ar.risk_reasons or ar.flags
+            priority = ar.priority
 
         elif isinstance(assessment_or_submission, dict):
             data = assessment_or_submission
@@ -767,6 +770,9 @@ class IOManager:
         self._print(f"{cyan}{'=' * width}{reset}")
         self._print(f"Threat Status   : {risk_color}{threat_status}{reset}")
         self._print(f"Risk Level      : {risk_color}{overall_risk}{reset}")
+        if priority:
+            label = "URGENT - CRITICAL THREAT" if priority == "urgent" else priority.upper()
+            self._print(f"Priority        : {risk_color}{label}{reset}")
         if primary_threat and primary_threat != "None Detected":
             self._print(f"Primary Threat  : {primary_threat}")
 
