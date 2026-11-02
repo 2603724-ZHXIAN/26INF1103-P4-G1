@@ -35,7 +35,7 @@ class IOManager {
   +display_assessment(result) None
   +display_threat_radar(radar: dict, topic: str) None
   +display_incident_report(report: dict) None
-  +browse_historical_records(records: list) int
+  +browse_historical_records(records: list) Optional~int~
   +validate_url_syntax(url: str)$ bool
   +generate_hash(value: str)$ str
 }
@@ -78,8 +78,8 @@ class DataManager {
   +save_text_analysis(id: int, ai_data: dict, model: str) None
   +save_technical_analysis(id: int, ai_data: dict, model: str) None
   +save_vt_scan_result(id: int, vt: dict) None
-  +get_submission_by_id(id: int) Submission
-  +get_submission_report(id: int) dict
+  +get_submission_by_id(id: int) Optional~Submission~
+  +get_submission_report(id: int) Optional~dict~
   +search_records(keyword: str) list
   +query_by_risk(level: str) list
   +get_top_threat_types() list
