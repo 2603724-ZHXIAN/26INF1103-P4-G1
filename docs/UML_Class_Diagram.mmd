@@ -9,6 +9,10 @@ config:
 classDiagram
 direction TB
 
+%% Selected members only. Default values and ... helper parameters are omitted for readability.
+%% $ denotes classifier-level operations: Python @staticmethod or @classmethod; notes distinguish them.
+%% Relationship/cardinality review is tracked separately with Sam; existing edges are preserved.
+
 %% ===================== Orchestration =====================
 class EngineCoordinator {
   #_io : IOManager
@@ -20,7 +24,7 @@ class EngineCoordinator {
   #_handle_text_pipeline(request: dict) None
   #_handle_resource_pipeline(request: dict) None
   #_handle_threat_radar(request: dict) None
-  #_safe_update_submission(sub: Submission) None
+  #_safe_update_submission(submission: Submission) None
   #_get_model_name() str
 }
 
@@ -32,8 +36,8 @@ class IOManager {
   #_data_manager : DataManager [0..1]
   +collect_user_request() dict
   +collect_interaction_details() tuple
-  +display_assessment(result) None
-  +display_threat_radar(radar: dict, topic: str) None
+  +display_assessment(assessment_or_submission: Submission_or_AssessmentResult_or_dict) None
+  +display_threat_radar(radar_data: dict, topic: Optional~str~) None
   +display_incident_report(report: dict) None
   +browse_historical_records(records: list) Optional~int~
   +validate_url_syntax(url: str)$ bool
@@ -46,9 +50,9 @@ class AIManager {
   +analyze_message(text: str, interaction: str, interaction_description: Optional~str~) dict
   +analyze_technical_threat(vt_data: dict, interaction: str, interaction_description: Optional~str~) dict
   +generate_education(vt_data: dict, risk_data: dict, interaction: str, interaction_description: Optional~str~) dict
-  +fetch_emerging_radar(topic: str) dict
-  +build_sandboxed_message_prompt(text: str) str
-  +build_sandboxed_technical_prompt(vt_data: dict) str
+  +fetch_emerging_radar(topic: Optional~str~) dict
+  +build_sandboxed_message_prompt(text: str, interaction: str, interaction_description: Optional~str~) str
+  +build_sandboxed_technical_prompt(vt_data: dict, interaction: str, interaction_description: Optional~str~) str
   #_call_with_failover(prompt: str, schema: dict) dict
   #_build_technical_analysis_schema()$ dict
   #_validate_technical_analysis(result: dict)$ Optional~str~
@@ -59,12 +63,12 @@ class LogicManager {
   #_known_indicators : set
   #_risk_matrix : dict
   #_ai_escalation : dict
-  +evaluate_text_threat(sub: Submission, ai_data: dict) AssessmentResult
+  +evaluate_text_threat(submission: Submission, ai_data: dict) AssessmentResult
   +evaluate_technical_threat(submission: Submission, vt_data: dict, ai_data: dict, interpreted_exposure: Optional~dict~) AssessmentResult
-  #_match_combination_rules(active: set) list
+  #_match_combination_rules(active_indicators) list
   #_evaluate_technical_evidence(vt_data: dict) dict
-  #_validate_technical_ai(ai_data: dict)$ dict
-  #_apply_ai_technical_rules(vt_risk: str, malicious: int, ai: dict) dict
+  #_validate_technical_ai(ai_data)$ dict
+  #_apply_ai_technical_rules(vt_risk: str, malicious_count: int, ai: dict) dict
   #_determine_route(...) dict
 }
 
@@ -72,17 +76,17 @@ class DataManager {
   #_db_path : str
   #_memory_connection : Connection [0..1]
   +initialize_database() None
-  +save_submission(sub: Submission) int
-  +save_assessment(id: int, a: AssessmentResult, model: str) None
-  +save_evidences(id: int, e: list~ThreatEvidence~) None
-  +save_text_analysis(id: int, ai_data: dict, model: str) None
-  +save_technical_analysis(id: int, ai_data: dict, model: str) None
-  +save_vt_scan_result(id: int, vt: dict) None
-  +get_submission_by_id(id: int) Optional~Submission~
-  +get_submission_report(id: int) Optional~dict~
-  +search_records(keyword: str) list
-  +query_by_risk(level: str) list
-  +get_top_threat_types() list
+  +save_submission(submission: Submission) int
+  +save_assessment(submission_id: int, assessment: AssessmentResult, model_name: str) None
+  +save_evidences(submission_id: int, evidences: list[ThreatEvidence]) None
+  +save_text_analysis(submission_id: int, ai_data: dict, model_name: str) None
+  +save_technical_analysis(submission_id: int, ai_data: dict, model_name: str) None
+  +save_vt_scan_result(submission_id: int, vt_result: dict) None
+  +get_submission_by_id(submission_id: int) Optional~Submission~
+  +get_submission_report(submission_id: int) Optional~dict~
+  +search_records(keyword: str) list~dict~
+  +query_by_risk(risk_category: str) list~dict~
+  +get_top_threat_types(*args, **kwargs) list~dict~
   +close() None
 }
 
@@ -95,7 +99,7 @@ class BaseLLMClient {
   #_timeout : int
   +model_name : str  «property»
   +provider_name : str  «abstract property»
-  +generate_structured_analysis(prompt: str, schema: dict)* dict
+  +generate_structured_analysis(prompt: str, response_schema: dict)* dict
   +validate_schema(data: dict, schema: dict) dict
 }
 
@@ -103,14 +107,14 @@ class GeminiClient {
   #_endpoint : str
   #_max_retries : int
   +provider_name : str
-  +generate_structured_analysis(prompt: str, schema: dict) dict
-  +fetch_threat_radar(topic: str) dict
+  +generate_structured_analysis(prompt: str, response_schema: dict) dict
+  +fetch_threat_radar(topic: Optional~str~) dict
 }
 
 class GroqClient {
   #_endpoint : str
   +provider_name : str
-  +generate_structured_analysis(prompt: str, schema: dict) dict
+  +generate_structured_analysis(prompt: str, response_schema: dict) dict
   #_make_schema_strict(schema: dict) dict
 }
 
@@ -121,10 +125,10 @@ class VirusTotalScanner {
   #_poll_interval : int
   #_max_poll_attempts : int
   +is_available() bool
-  +scan_resource(type: str, value: str) dict
+  +scan_resource(resource_type: str, resource_identifier: str) dict
   +get_report_url(resource_type: str, resource_id: str) Optional~str~
-  +calculate_sha256(path: str)$ str
-  #_parse_vt_response(raw: dict, type: str) dict
+  +calculate_sha256(file_path: str)$ str
+  #_parse_vt_response(raw_json: dict, resource_type: str) dict
 }
 
 %% ===================== Domain models =====================
@@ -137,12 +141,12 @@ class Submission {
   #_processing_status : str
   #_assessment : AssessmentResult [0..1]
   #_evidences : list~ThreatEvidence~
-  +set_assessment(a: AssessmentResult) None
+  +set_assessment(assessment: AssessmentResult) None
   +create_evidence(name, source, ...) ThreatEvidence
-  +add_evidence(e: ThreatEvidence) None
+  +add_evidence(evidence: ThreatEvidence) None
   +mark_processing() None
   +mark_completed(assessment: Optional~AssessmentResult~) None
-  +mark_failed(msg: str) None
+  +mark_failed(error_message: str) None
   +to_dict() dict
   +from_dict(data: dict)$ Submission
 }
@@ -159,7 +163,7 @@ class AssessmentResult {
   #_flags : list~str~
   #_matched_rules : list
   #_recovery_steps : list~str~
-  +attach_educational_guidance(what, summary, steps) None
+  +attach_educational_guidance(what_it_is: Optional~str~, threat_summary: Optional~str~, recovery_steps: Optional~list~) None
   +is_high_risk() bool
   +requires_urgent_action() bool
   +to_dict() dict
