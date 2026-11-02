@@ -51,7 +51,7 @@ class AIManager {
   +build_sandboxed_technical_prompt(vt_data: dict) str
   #_call_with_failover(prompt: str, schema: dict) dict
   #_build_technical_analysis_schema()$ dict
-  #_validate_technical_analysis(result: dict)$ str
+  #_validate_technical_analysis(result: dict)$ Optional~str~
 }
 
 class LogicManager {
@@ -141,7 +141,7 @@ class Submission {
   +create_evidence(name, source, ...) ThreatEvidence
   +add_evidence(e: ThreatEvidence) None
   +mark_processing() None
-  +mark_completed() None
+  +mark_completed(assessment: Optional~AssessmentResult~) None
   +mark_failed(msg: str) None
   +to_dict() dict
   +from_dict(data: dict)$ Submission
