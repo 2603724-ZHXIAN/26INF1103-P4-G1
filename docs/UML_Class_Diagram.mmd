@@ -43,9 +43,9 @@ class IOManager {
 class AIManager {
   #_llm_client : BaseLLMClient
   #_fallback_client : BaseLLMClient [0..1]
-  +analyze_message(text: str, interaction: str) dict
-  +analyze_technical_threat(vt_data: dict, interaction: str) dict
-  +generate_education(vt_data: dict, risk_data: dict) dict
+  +analyze_message(text: str, interaction: str, interaction_description: Optional~str~) dict
+  +analyze_technical_threat(vt_data: dict, interaction: str, interaction_description: Optional~str~) dict
+  +generate_education(vt_data: dict, risk_data: dict, interaction: str, interaction_description: Optional~str~) dict
   +fetch_emerging_radar(topic: str) dict
   +build_sandboxed_message_prompt(text: str) str
   +build_sandboxed_technical_prompt(vt_data: dict) str
