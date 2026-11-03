@@ -14,6 +14,7 @@ from typing import Optional
 from uuid import uuid4
 
 from ..models import AssessmentResult, Submission, ThreatEvidence
+from ..models.email_ingestion import IngestedEmail
 
 LOGGER = logging.getLogger(__name__)
 SCHEMA = """
@@ -69,6 +70,28 @@ SCHEMA = """
         created_at TEXT NOT NULL,
         completed_at TEXT
     );
+
+        CREATE TABLE IF NOT EXISTS email_metadata (
+        submission_id INTEGER PRIMARY KEY,
+
+        item_id TEXT NOT NULL CHECK (length(trim(item_id)) > 0),
+        source_path TEXT NOT NULL,
+        file_hash TEXT NOT NULL,
+
+        subject TEXT NOT NULL,
+        sender TEXT NOT NULL,
+        reply_to TEXT NOT NULL,
+
+        recipients TEXT NOT NULL,
+        urls TEXT NOT NULL,
+        attachments TEXT NOT NULL,
+        warnings TEXT NOT NULL,
+
+        FOREIGN KEY (submission_id)
+            REFERENCES submission(submission_id)
+            ON DELETE CASCADE
+    );
+
 
     CREATE TABLE IF NOT EXISTS text_analysis (
         text_analysis_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -528,6 +551,189 @@ class DataManager:
             ).fetchall()
 
         return [dict(row) for row in rows]
+
+    def save_email_metadata(
+        self,
+        submission_id: int,
+        email: IngestedEmail,
+    ) -> None:
+        """Save parsed metadata for an email already linked to a batch."""
+        self._check_id(submission_id)
+
+        if not isinstance(email, IngestedEmail):
+            raise TypeError("email must be an IngestedEmail object.")
+
+        metadata = email.to_dict()
+
+        with self._get_connection() as connection:
+            submission = connection.execute(
+                """
+                SELECT s.input_type, s.dataset_batch
+                FROM submission AS s
+                JOIN email_batch AS b
+                    ON b.batch_reference = s.dataset_batch
+                WHERE s.submission_id = ?
+                """,
+                (submission_id,),
+            ).fetchone()
+
+            if submission is None:
+                raise ValueError(
+                    "The submission must exist and belong to an email batch."
+                )
+
+            if submission["input_type"] != "text":
+                raise ValueError(
+                    "Email metadata requires a text submission."
+                )
+
+            # EMAIL-001 may appear in different batches, but cannot
+            # identify two submissions within the same batch.
+            duplicate = connection.execute(
+                """
+                SELECT m.submission_id
+                FROM email_metadata AS m
+                JOIN submission AS s
+                    ON s.submission_id = m.submission_id
+                WHERE s.dataset_batch = ?
+                    AND m.item_id = ?
+                    AND m.submission_id != ?
+                """,
+                (
+                    submission["dataset_batch"],
+                    metadata["item_id"],
+                    submission_id,
+                ),
+            ).fetchone()
+
+            if duplicate is not None:
+                raise ValueError(
+                    "This email reference already exists in the batch."
+                )
+
+            existing = connection.execute(
+                """
+                SELECT item_id, file_hash, source_path
+                FROM email_metadata
+                WHERE submission_id = ?
+                """,
+                (submission_id,),
+            ).fetchone()
+
+            if existing is not None:
+                identity_fields = (
+                    "item_id",
+                    "file_hash",
+                    "source_path",
+                )
+
+                for field in identity_fields:
+                    if existing[field] != metadata[field]:
+                        raise ValueError(
+                            "Saved metadata belongs to a different email."
+                        )
+
+            connection.execute(
+                """
+                INSERT INTO email_metadata (
+                    submission_id,
+                    item_id,
+                    source_path,
+                    file_hash,
+                    subject,
+                    sender,
+                    reply_to,
+                    recipients,
+                    urls,
+                    attachments,
+                    warnings
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(submission_id) DO UPDATE SET
+                    subject = excluded.subject,
+                    sender = excluded.sender,
+                    reply_to = excluded.reply_to,
+                    recipients = excluded.recipients,
+                    urls = excluded.urls,
+                    attachments = excluded.attachments,
+                    warnings = excluded.warnings
+                """,
+                (
+                    submission_id,
+                    metadata["item_id"],
+                    metadata["source_path"],
+                    metadata["file_hash"],
+                    metadata["subject"],
+                    metadata["sender"],
+                    metadata["reply_to"],
+                    json.dumps(
+                        metadata["recipients"],
+                        ensure_ascii=False,
+                    ),
+                    json.dumps(
+                        metadata["urls"],
+                        ensure_ascii=False,
+                    ),
+                    json.dumps(
+                        metadata["attachments"],
+                        ensure_ascii=False,
+                    ),
+                    json.dumps(
+                        metadata["warnings"],
+                        ensure_ascii=False,
+                    ),
+                ),
+            )
+
+    def get_email_metadata(
+        self,
+        submission_id: int,
+    ) -> Optional[dict]:
+        """Load email metadata, returning None if it has not been saved."""
+        self._check_id(submission_id)
+
+        with self._get_connection() as connection:
+            row = connection.execute(
+                """
+                SELECT *
+                FROM email_metadata
+                WHERE submission_id = ?
+                """,
+                (submission_id,),
+            ).fetchone()
+
+        if row is None:
+            return None
+
+        metadata = dict(row)
+
+        list_fields = (
+            "recipients",
+            "urls",
+            "attachments",
+            "warnings",
+        )
+
+        for field in list_fields:
+            metadata[field] = self._decode_json(
+                metadata[field],
+                field,
+            )
+
+        # Reuse the existing model's validation instead of duplicating
+        # its rules for recipients, attachment metadata and file hashes.
+        try:
+            validation_data = dict(metadata)
+            validation_data["body_text"] = ""
+
+            IngestedEmail.from_dict(validation_data)
+
+        except (TypeError, ValueError, KeyError) as error:
+            raise DataManagerError(
+                "Stored email metadata is invalid."
+            ) from error
+
+        return metadata
 
 
     def save_submission(self, submission: Submission) -> int:
