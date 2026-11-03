@@ -866,5 +866,120 @@ class TestBatchCoordinator(unittest.TestCase):
             "completed",
         )
 
+    def test_successful_batch_saves_completed_status(self):
+        """Successful email processing saves completed batch status."""
+        result = self._run_batch()
+
+        self.assertEqual(result["processing_status"], "completed")
+        self.assertTrue(result["status_saved"])
+        self.assertIsNone(result["status_error"])
+        self.assertEqual(result["successful_count"], 2)
+        self.assertEqual(result["analysis_failed_count"], 0)
+
+        saved_batch = next(
+            batch
+            for batch in self.data.list_email_batches()
+            if batch["batch_reference"] == result["batch_reference"]
+        )
+
+        self.assertEqual(
+            saved_batch["processing_status"],
+            "completed",
+        )
+
+    def test_mixed_results_save_partially_failed_status(self):
+        """One AI failure and one success produce partially_failed."""
+        self.ai.analyze_message.side_effect = [
+            {"error": "Simulated first-email failure."},
+            self._make_batch_response(),
+        ]
+
+        result = self._run_batch()
+
+        self.assertEqual(
+            result["processing_status"],
+            "partially_failed",
+        )
+        self.assertTrue(result["status_saved"])
+        self.assertEqual(result["successful_count"], 1)
+        self.assertEqual(result["analysis_failed_count"], 1)
+        self.assertEqual(result["unprocessed_count"], 0)
+
+        saved_batch = next(
+            batch
+            for batch in self.data.list_email_batches()
+            if batch["batch_reference"] == result["batch_reference"]
+        )
+
+        self.assertEqual(
+            saved_batch["processing_status"],
+            "partially_failed",
+        )
+
+    def test_all_ai_failures_save_failed_status(self):
+        """A batch with no successful analyses saves failed status."""
+        self.ai.analyze_message.side_effect = [
+            {"error": "Simulated first-email failure."},
+            {"error": "Simulated second-email failure."},
+        ]
+
+        result = self._run_batch()
+
+        self.assertEqual(result["processing_status"], "failed")
+        self.assertTrue(result["status_saved"])
+        self.assertEqual(result["successful_count"], 0)
+        self.assertEqual(result["analysis_failed_count"], 2)
+        self.assertEqual(result["unprocessed_count"], 0)
+
+        saved_batch = next(
+            batch
+            for batch in self.data.list_email_batches()
+            if batch["batch_reference"] == result["batch_reference"]
+        )
+
+        self.assertEqual(
+            saved_batch["processing_status"],
+            "failed",
+        )
+
+    def test_final_status_save_failure_is_reported(self):
+        """A failed final update must not claim the status was saved."""
+        original_update = self.data.update_email_batch_status
+
+        def update_with_final_failure(batch_reference, status):
+            if status == "completed":
+                raise DataManagerError(
+                    "Simulated final status save failure."
+                )
+
+            return original_update(batch_reference, status)
+
+        with patch.object(
+            self.data,
+            "update_email_batch_status",
+            side_effect=update_with_final_failure,
+        ):
+            result = self._run_batch()
+
+        self.assertEqual(result["successful_count"], 2)
+        self.assertEqual(result["processing_status"], "completed")
+        self.assertFalse(result["status_saved"])
+        self.assertIn(
+            "Simulated final status save failure.",
+            result["status_error"],
+        )
+
+        saved_batch = next(
+            batch
+            for batch in self.data.list_email_batches()
+            if batch["batch_reference"] == result["batch_reference"]
+        )
+
+        # The initial processing update succeeded, but the final one failed.
+        self.assertEqual(
+            saved_batch["processing_status"],
+            "processing",
+        )
+
 if __name__ == "__main__":
     unittest.main()
