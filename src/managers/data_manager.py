@@ -531,47 +531,157 @@ class DataManager:
 
 
     def save_submission(self, submission: Submission) -> int:
-        """Insert/update a submission and its attached children atomically.
+        """Save a submission while preserving existing batch membership.
 
-        A previously assigned ID must identify an existing record.
-        Existing evidence rows are replaced by the object's evidence collection.
-        Object IDs are updated only after the transaction commits successfully.
+        Existing evidence rows are replaced by the object's collection.
+        Object IDs are updated only after the transaction commits.
+        An empty batch reference on an older object cannot clear a saved link.
         """
         if not isinstance(submission, Submission):
             raise TypeError("submission must be a Submission object.")
+
         data = submission.to_dict()
+
         fields = (
-            "data_origin", "dataset_batch", "input_type", "input_value",
-            "input_hash", "file_path", "interaction_type", "interaction_description",
-            "processing_status", "error_message", "created_at", "completed_at",
+            "data_origin",
+            "dataset_batch",
+            "input_type",
+            "input_value",
+            "input_hash",
+            "file_path",
+            "interaction_type",
+            "interaction_description",
+            "processing_status",
+            "error_message",
+            "created_at",
+            "completed_at",
         )
+
+        requested_batch = data["dataset_batch"]
+
+        if requested_batch is not None:
+            if not isinstance(requested_batch, str):
+                raise TypeError("dataset_batch must be a string or None.")
+
+            requested_batch = requested_batch.strip() or None
+
         with self._get_connection() as connection:
             sub_id = submission.submission_id
-            values = [data[name] for name in fields]
+            saved_batch = None
+
+            if sub_id is not None:
+                self._check_id(sub_id)
+
+                existing = connection.execute(
+                    """
+                    SELECT dataset_batch
+                    FROM submission
+                    WHERE submission_id = ?
+                    """,
+                    (sub_id,),
+                ).fetchone()
+
+                if existing is None:
+                    raise ValueError("No submission exists with that ID.")
+
+                saved_batch = existing["dataset_batch"]
+
+            if saved_batch:
+                if requested_batch not in (None, saved_batch):
+                    raise ValueError(
+                        "This submission already belongs to another batch."
+                    )
+
+                # Preserve the database link when an older object has None.
+                data["dataset_batch"] = saved_batch
+            else:
+                data["dataset_batch"] = requested_batch
+
+            effective_batch = data["dataset_batch"]
+
+            # dataset_batch also supports pre-existing dataset labels.
+            # Validate email batch references without rejecting those labels.
+            is_email_batch = (
+                data["data_origin"] == "batch_email"
+                or (
+                    effective_batch is not None
+                    and effective_batch.startswith("BATCH-")
+                )
+            )
+
+            if effective_batch and is_email_batch:
+                batch = connection.execute(
+                    """
+                    SELECT batch_reference
+                    FROM email_batch
+                    WHERE batch_reference = ?
+                    """,
+                    (effective_batch,),
+                ).fetchone()
+
+                if batch is None:
+                    raise ValueError(
+                        "No email batch exists with that reference."
+                    )
+
+                if data["input_type"] != "text":
+                    raise ValueError(
+                        "Email batch submissions must use input_type='text'."
+                    )
+
+            values = []
+
+            for name in fields:
+                values.append(data[name])
+
             if sub_id is None:
                 cursor = connection.execute(
-                    "INSERT INTO submission (" + ", ".join(fields) + ") VALUES ("
-                    + ", ".join("?" for _ in fields) + ")", values,
+                    "INSERT INTO submission ("
+                    + ", ".join(fields)
+                    + ") VALUES ("
+                    + ", ".join("?" for _ in fields)
+                    + ")",
+                    values,
                 )
+
                 sub_id = cursor.lastrowid
             else:
-                self._check_id(sub_id)
-                self._require_submission(connection, sub_id)
                 connection.execute(
-                    "UPDATE submission SET " + ", ".join(f"{name} = ?" for name in fields)
-                    + " WHERE submission_id = ?", values + [sub_id],
+                    "UPDATE submission SET "
+                    + ", ".join(
+                        f"{name} = ?" for name in fields
+                    )
+                    + " WHERE submission_id = ?",
+                    values + [sub_id],
                 )
+
             assessment_id = None
+
             if submission.assessment is not None:
                 assessment_id = self._write_assessment(
-                    connection, sub_id, submission.assessment, "unknown"
+                    connection,
+                    sub_id,
+                    submission.assessment,
+                    "unknown",
                 )
-            evidence_ids = self._write_evidences(connection, sub_id, submission.evidences)
+
+            evidence_ids = self._write_evidences(
+                connection,
+                sub_id,
+                submission.evidences,
+            )
+
         submission.submission_id = sub_id
+
         if assessment_id is not None:
             submission.assessment.assessment_id = assessment_id
-        for evidence, evidence_id in zip(submission.evidences, evidence_ids):
+
+        for evidence, evidence_id in zip(
+            submission.evidences,
+            evidence_ids,
+        ):
             evidence.evidence_id = evidence_id
+
         return sub_id
 
     def _write_assessment(self, connection, submission_id, assessment, model_name):
