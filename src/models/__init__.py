@@ -9,5 +9,6 @@ Exports the core domain entities used across the application:
 from .assessment import AssessmentResult
 from .evidence import ThreatEvidence
 from .submission import Submission
+from .email_ingestion import IngestedEmail
 
-__all__ = ["Submission", "AssessmentResult", "ThreatEvidence"]
+__all__ = ["Submission", "AssessmentResult", "ThreatEvidence", "IngestedEmail"]
