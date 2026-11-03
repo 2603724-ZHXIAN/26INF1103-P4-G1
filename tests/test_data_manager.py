@@ -5,6 +5,7 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from contextlib import closing
 
 from src.managers.data_manager import DataManager, DataManagerError
 from src.models import AssessmentResult, Submission, ThreatEvidence
@@ -231,7 +232,7 @@ class TechnicalAIAnalysisPersistenceTests(unittest.TestCase):
     def test_saving_twice_updates_instead_of_duplicating(self):
         self.manager.save_technical_analysis(self.sub_id, self.ai_data, "m")
         self.manager.save_technical_analysis(self.sub_id, {**self.ai_data, "scam_confidence": 40}, "m")
-        with sqlite3.connect(self.manager._db_path) as conn:
+        with closing(sqlite3.connect(self.manager._db_path)) as conn:
             rows = conn.execute("SELECT scam_confidence FROM technical_ai_analysis").fetchall()
         self.assertEqual(rows, [(40,)])
 
@@ -256,7 +257,7 @@ class TechnicalAIAnalysisPersistenceTests(unittest.TestCase):
             "parsed_result": {"resource_type": "file", "detection_stats": {"malicious": 1}},
         }
         self.manager.save_vt_scan_result(self.sub_id, vt_result)
-        with sqlite3.connect(self.manager._db_path) as conn:
+        with closing(sqlite3.connect(self.manager._db_path)) as conn:
             row = conn.execute("SELECT resource_identifier FROM vt_scan_result").fetchone()
         self.assertEqual(row[0], "invoice.exe")
 
