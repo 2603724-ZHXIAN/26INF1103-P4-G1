@@ -552,6 +552,291 @@ class DataManager:
 
         return [dict(row) for row in rows]
 
+    def list_email_batches(self) -> list[dict]:
+        """List saved batches with counts calculated from saved submissions."""
+        with self._get_connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT
+                    b.*,
+                    COUNT(s.submission_id) AS saved_email_count,
+
+                    SUM(
+                        CASE WHEN s.processing_status = 'completed'
+                        THEN 1 ELSE 0 END
+                    ) AS completed_count,
+
+                    SUM(
+                        CASE WHEN s.processing_status = 'failed'
+                        THEN 1 ELSE 0 END
+                    ) AS analysis_failed_count,
+
+                    SUM(
+                        CASE
+                            WHEN s.processing_status = 'completed'
+                                AND a.overall_risk = 'high'
+                            THEN 1 ELSE 0
+                        END
+                    ) AS high_risk_count,
+
+                    SUM(
+                        CASE
+                            WHEN s.processing_status = 'completed'
+                                AND a.overall_risk = 'medium'
+                            THEN 1 ELSE 0
+                        END
+                    ) AS medium_risk_count,
+
+                    SUM(
+                        CASE
+                            WHEN s.processing_status = 'completed'
+                                AND a.overall_risk = 'low'
+                            THEN 1 ELSE 0
+                        END
+                    ) AS low_risk_count
+
+                FROM email_batch AS b
+
+                LEFT JOIN submission AS s
+                    ON s.dataset_batch = b.batch_reference
+
+                LEFT JOIN final_assessment AS a
+                    ON a.submission_id = s.submission_id
+
+                GROUP BY b.batch_id
+
+                ORDER BY b.created_at DESC, b.batch_id DESC
+                """
+            ).fetchall()
+
+        batches = []
+
+        for row in rows:
+            batches.append(dict(row))
+
+        return batches
+
+    def _query_batch_emails(
+        self,
+        batch_reference: str,
+        *,
+        keyword: str = "",
+        item_id: Optional[str] = None,
+        high_risk_only: bool = False,
+    ) -> list[dict]:
+        """Run the shared batch-scoped email query."""
+        if not isinstance(batch_reference, str):
+            raise TypeError("batch_reference must be a string.")
+
+        batch_reference = batch_reference.strip()
+
+        if not batch_reference:
+            raise ValueError("batch_reference cannot be empty.")
+
+        if not isinstance(keyword, str):
+            raise TypeError("keyword must be a string.")
+
+        if not isinstance(high_risk_only, bool):
+            raise TypeError("high_risk_only must be a boolean.")
+
+        if item_id is not None:
+            if not isinstance(item_id, str):
+                raise TypeError("item_id must be a string or None.")
+
+            item_id = item_id.strip()
+
+            if not item_id:
+                raise ValueError("item_id cannot be empty.")
+
+        conditions = ["s.dataset_batch = ?"]
+        parameters = [batch_reference]
+
+        if item_id is not None:
+            conditions.append("m.item_id = ?")
+            parameters.append(item_id)
+
+        keyword = keyword.strip()
+
+        if keyword:
+            # Treat %, _ and backslashes as literal search characters.
+            escaped_keyword = keyword.replace("\\", "\\\\")
+            escaped_keyword = escaped_keyword.replace("%", "\\%")
+            escaped_keyword = escaped_keyword.replace("_", "\\_")
+
+            pattern = f"%{escaped_keyword}%"
+
+            conditions.append(
+                r"""(
+                    COALESCE(m.subject, '') LIKE ? ESCAPE '\'
+                    OR COALESCE(m.sender, '') LIKE ? ESCAPE '\'
+                    OR COALESCE(m.source_path, '') LIKE ? ESCAPE '\'
+                    OR s.input_value LIKE ? ESCAPE '\'
+                )"""
+            )
+
+            for _ in range(4):
+                parameters.append(pattern)
+
+        if high_risk_only:
+            conditions.append("s.processing_status = 'completed'")
+            conditions.append("a.overall_risk = ?")
+            parameters.append("high")
+
+        query = """
+            SELECT
+                s.submission_id,
+                s.dataset_batch AS batch_reference,
+                s.processing_status,
+                s.error_message,
+                s.created_at,
+
+                m.item_id,
+                m.source_path,
+                m.subject,
+                m.sender,
+
+                a.overall_risk,
+                a.message_risk,
+                a.exposure_level,
+                a.priority
+
+            FROM submission AS s
+
+            LEFT JOIN email_metadata AS m
+                ON m.submission_id = s.submission_id
+
+            LEFT JOIN final_assessment AS a
+                ON a.submission_id = s.submission_id
+
+            WHERE
+        """
+
+        query += " AND ".join(conditions)
+        query += " ORDER BY s.submission_id"
+
+        with self._get_connection() as connection:
+            batch = connection.execute(
+                """
+                SELECT batch_reference
+                FROM email_batch
+                WHERE batch_reference = ?
+                """,
+                (batch_reference,),
+            ).fetchone()
+
+            if batch is None:
+                raise ValueError("No batch exists with that reference.")
+
+            rows = connection.execute(
+                query,
+                parameters,
+            ).fetchall()
+
+        emails = []
+
+        for row in rows:
+            emails.append(dict(row))
+
+        return emails
+
+    def search_batch_emails(
+        self,
+        batch_reference: str,
+        keyword: str = "",
+    ) -> list[dict]:
+        """Search one batch by subject, sender, source path or body.
+
+        An empty keyword lists all saved submissions in that batch.
+        """
+        return self._query_batch_emails(
+            batch_reference,
+            keyword=keyword,
+        )
+
+    def get_batch_high_risk_emails(
+        self,
+        batch_reference: str,
+    ) -> list[dict]:
+        """Return completed emails with a saved overall risk of high."""
+        return self._query_batch_emails(
+            batch_reference,
+            high_risk_only=True,
+        )
+
+    def get_batch_email_details(
+        self,
+        batch_reference: str,
+        item_id: str,
+    ) -> Optional[dict]:
+        """Load an email's content, metadata, assessment and education.
+
+        The email reference is resolved within the selected batch.
+        No new AI request is made.
+        """
+        matches = self._query_batch_emails(
+            batch_reference,
+            item_id=item_id,
+        )
+
+        if not matches:
+            return None
+
+        if len(matches) != 1:
+            raise DataManagerError(
+                "Multiple emails have the same reference in this batch."
+            )
+
+        submission_id = matches[0]["submission_id"]
+
+        submission = self.get_submission_by_id(submission_id)
+        metadata = self.get_email_metadata(submission_id)
+
+        if submission is None or metadata is None:
+            raise DataManagerError(
+                "The saved email details are incomplete."
+            )
+
+        with self._get_connection() as connection:
+            analysis = connection.execute(
+                """
+                SELECT raw_gemini_response
+                FROM text_analysis
+                WHERE submission_id = ?
+                """,
+                (submission_id,),
+            ).fetchone()
+
+        education = {}
+
+        if analysis is not None:
+            try:
+                ai_result = json.loads(
+                    analysis["raw_gemini_response"]
+                )
+            except (TypeError, ValueError) as error:
+                raise DataManagerError(
+                    "The saved email AI response contains invalid JSON."
+                ) from error
+
+            if not isinstance(ai_result, dict):
+                raise DataManagerError(
+                    "The saved email AI response must be an object."
+                )
+
+            education = ai_result.get("education", {})
+
+            if not isinstance(education, dict):
+                raise DataManagerError(
+                    "The saved email education must be an object."
+                )
+
+        return {
+            "submission": submission,
+            "metadata": metadata,
+            "education": education,
+        }
+
+
     def save_email_metadata(
         self,
         submission_id: int,
