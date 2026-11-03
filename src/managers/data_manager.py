@@ -429,6 +429,107 @@ class DataManager:
 
         return batch_reference
 
+    def link_submission_to_batch(
+        self,
+        batch_reference: str,
+        submission_id: int,
+    ) -> None:
+        """Link a saved text submission to an existing email batch."""
+        self._check_id(submission_id)
+
+        if not isinstance(batch_reference, str):
+            raise TypeError("batch_reference must be a string.")
+
+        batch_reference = batch_reference.strip()
+
+        if not batch_reference:
+            raise ValueError("batch_reference cannot be empty.")
+
+        with self._get_connection() as connection:
+            batch = connection.execute(
+                """
+                SELECT batch_reference
+                FROM email_batch
+                WHERE batch_reference = ?
+                """,
+                (batch_reference,),
+            ).fetchone()
+
+            if batch is None:
+                raise ValueError("No batch exists with that reference.")
+
+            submission = connection.execute(
+                """
+                SELECT input_type, dataset_batch
+                FROM submission
+                WHERE submission_id = ?
+                """,
+                (submission_id,),
+            ).fetchone()
+
+            if submission is None:
+                raise ValueError("No submission exists with that ID.")
+
+            if submission["input_type"] != "text":
+                raise ValueError(
+                    "Email batch submissions must use input_type='text'."
+                )
+
+            current_batch = submission["dataset_batch"]
+
+            if current_batch not in (None, "", batch_reference):
+                raise ValueError(
+                    "This submission already belongs to another batch."
+                )
+
+            connection.execute(
+                """
+                UPDATE submission
+                SET dataset_batch = ?
+                WHERE submission_id = ?
+                """,
+                (batch_reference, submission_id),
+            )
+
+    def get_batch_submissions(
+        self,
+        batch_reference: str,
+    ) -> list[dict]:
+        """Retrieve saved submissions belonging to one email batch."""
+        if not isinstance(batch_reference, str):
+            raise TypeError("batch_reference must be a string.")
+
+        batch_reference = batch_reference.strip()
+
+        if not batch_reference:
+            raise ValueError("batch_reference cannot be empty.")
+
+        with self._get_connection() as connection:
+            batch = connection.execute(
+                """
+                SELECT batch_reference
+                FROM email_batch
+                WHERE batch_reference = ?
+                """,
+                (batch_reference,),
+            ).fetchone()
+
+            if batch is None:
+                raise ValueError("No batch exists with that reference.")
+
+            rows = connection.execute(
+                """
+                SELECT *
+                FROM submission
+                WHERE dataset_batch = ?
+                ORDER BY submission_id
+                """,
+                (batch_reference,),
+            ).fetchall()
+
+        return [dict(row) for row in rows]
+
+
     def save_submission(self, submission: Submission) -> int:
         """Insert/update a submission and its attached children atomically.
 
