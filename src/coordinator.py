@@ -209,6 +209,9 @@ class EngineCoordinator:
             self._io._print(f"\n[Risk Analysis] Risk evaluation failed: {logic_err}")
             return
 
+        # Step 6b: Attach the AI's educational guidance (what it is + recovery steps)
+        self._attach_text_education(assessment, ai_result)
+
         # Step 7: Persist assessment, evidence, and semantic analysis
         model_name = self._get_model_name()
         try:
@@ -425,6 +428,29 @@ class EngineCoordinator:
     # -------------------------------------------------------------------------
     # Private Helpers
     # -------------------------------------------------------------------------
+
+    @staticmethod
+    def _attach_text_education(assessment, ai_result: dict) -> None:
+        """Attach the AI's educational guidance to a text assessment.
+
+        The rule-based recommended action stays first because it is specific to
+        the route (e.g. contact the bank), followed by the AI's recovery steps.
+        A missing or malformed education block leaves the assessment unchanged.
+        """
+        education = ai_result.get("education") if isinstance(ai_result, dict) else None
+        if not isinstance(education, dict):
+            return
+        steps = [assessment.recommended_action] if assessment.recommended_action else []
+        ai_steps = education.get("recovery_steps")
+        if isinstance(ai_steps, list):
+            for step in ai_steps:
+                if isinstance(step, str) and step.strip() and step.strip() not in steps:
+                    steps.append(step.strip())
+        assessment.attach_educational_guidance(
+            what_it_is=education.get("what_it_is") or None,
+            threat_summary=education.get("threat_summary") or None,
+            recovery_steps=steps or None,
+        )
 
     def _safe_update_submission(self, submission: Submission) -> None:
         """Persist a submission status update, swallowing DB errors to avoid masking pipeline errors."""
