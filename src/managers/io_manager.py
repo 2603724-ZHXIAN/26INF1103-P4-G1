@@ -333,6 +333,86 @@ class IOManager:
 
             self._print()
 
+    def collect_batch_input_request(self) -> Optional[dict]:
+        """Collect email paths without parsing or analysing files."""
+        while True:
+            self._print()
+            self._print("=" * self._banner_width)
+            self._print("BATCH EMAIL INPUT")
+            self._print("=" * self._banner_width)
+            self._print("1. Import multiple .eml files")
+            self._print("2. Import a folder containing .eml files")
+            self._print("0. Back to Main Menu")
+
+            choice = input("Select an option: > ").strip()
+
+            if choice == "0":
+                return None
+
+            if choice not in {"1", "2"}:
+                self._print("Invalid choice. Enter 1, 2 or 0.")
+                continue
+
+            paths = []
+
+            if choice == "1":
+                self._print(
+                    "Enter one file path at a time, without surrounding quotes."
+                )
+                self._print(
+                    "Enter DONE to finish, or BACK to cancel."
+                )
+
+                while True:
+                    path = input("Email file path: > ").strip()
+
+                    if path.upper() == "BACK":
+                        return None
+
+                    if path.upper() == "DONE":
+                        if paths:
+                            break
+
+                        self._print(
+                            "Enter at least one file path first."
+                        )
+                        continue
+
+                    path = path.strip('"')
+
+                    if not path:
+                        self._print("The file path cannot be empty.")
+                        continue
+
+                    if not path.lower().endswith(".eml"):
+                        self._print("Select a file ending in .eml.")
+                        continue
+
+                    paths.append(path)
+
+            else:
+                while True:
+                    path = input(
+                        "Folder path, or BACK to cancel: > "
+                    ).strip()
+
+                    if path.upper() == "BACK":
+                        return None
+
+                    path = path.strip('"')
+
+                    if not path:
+                        self._print("The folder path cannot be empty.")
+                        continue
+
+                    paths.append(path)
+                    break
+
+            return {
+                "action": "batch_email_analysis",
+                "paths": paths,
+            }
+
     def _collect_text_request(self) -> Optional[dict]:
         """Collect and validate raw text or email submission."""
         yellow = self._c("yellow")
