@@ -46,6 +46,22 @@ SCHEMA = """
         )
     );
 
+    CREATE TABLE IF NOT EXISTS email_batch_issue (
+        issue_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        batch_reference TEXT NOT NULL,
+        item_id TEXT NOT NULL,
+        source_path TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('duplicate', 'failed')),
+        code TEXT NOT NULL,
+        message TEXT NOT NULL,
+        duplicate_of TEXT,
+
+        FOREIGN KEY (batch_reference)
+            REFERENCES email_batch(batch_reference)
+            ON DELETE CASCADE
+    );
+
+
     CREATE TABLE IF NOT EXISTS submission (
         submission_id INTEGER PRIMARY KEY AUTOINCREMENT,
         data_origin TEXT NOT NULL,
@@ -452,6 +468,187 @@ class DataManager:
 
         return batch_reference
 
+    def save_batch_import_issues(
+        self,
+        batch_reference: str,
+        issues: list[dict],
+    ) -> None:
+        """Replace a batch's import-issue snapshot atomically."""
+        if not isinstance(batch_reference, str):
+            raise TypeError("batch_reference must be a string.")
+
+        batch_reference = batch_reference.strip()
+
+        if not batch_reference:
+            raise ValueError("batch_reference cannot be empty.")
+
+        if not isinstance(issues, list):
+            raise TypeError("issues must be a list.")
+
+        values = []
+
+        for issue in issues:
+            if not isinstance(issue, dict):
+                raise TypeError("Each issue must be a dictionary.")
+
+            required_fields = (
+                "item_id",
+                "source_path",
+                "kind",
+                "code",
+                "message",
+            )
+
+            for field in required_fields:
+                value = issue.get(field)
+
+                if not isinstance(value, str) or not value.strip():
+                    raise ValueError(
+                        f"Issue {field} must be a non-empty string."
+                    )
+
+            if issue["kind"] not in {"duplicate", "failed"}:
+                raise ValueError(
+                    "Issue kind must be duplicate or failed."
+                )
+
+            duplicate_of = issue.get("duplicate_of")
+
+            if duplicate_of is not None:
+                if (
+                    not isinstance(duplicate_of, str)
+                    or not duplicate_of.strip()
+                ):
+                    raise ValueError(
+                        "duplicate_of must be a non-empty string or None."
+                    )
+
+            values.append(
+                (
+                    batch_reference,
+                    issue["item_id"],
+                    issue["source_path"],
+                    issue["kind"],
+                    issue["code"],
+                    issue["message"],
+                    duplicate_of,
+                )
+            )
+
+        with self._get_connection() as connection:
+            batch = connection.execute(
+                """
+                SELECT batch_reference
+                FROM email_batch
+                WHERE batch_reference = ?
+                """,
+                (batch_reference,),
+            ).fetchone()
+
+            if batch is None:
+                raise ValueError("No batch exists with that reference.")
+
+            connection.execute(
+                """
+                DELETE FROM email_batch_issue
+                WHERE batch_reference = ?
+                """,
+                (batch_reference,),
+            )
+
+            connection.executemany(
+                """
+                INSERT INTO email_batch_issue (
+                    batch_reference,
+                    item_id,
+                    source_path,
+                    kind,
+                    code,
+                    message,
+                    duplicate_of
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                values,
+            )
+
+    def get_batch_import_issues(
+        self,
+        batch_reference: str,
+    ) -> list[dict]:
+        """Retrieve saved duplicate and failed-import details."""
+        if not isinstance(batch_reference, str):
+            raise TypeError("batch_reference must be a string.")
+
+        batch_reference = batch_reference.strip()
+
+        if not batch_reference:
+            raise ValueError("batch_reference cannot be empty.")
+
+        with self._get_connection() as connection:
+            batch = connection.execute(
+                """
+                SELECT batch_reference
+                FROM email_batch
+                WHERE batch_reference = ?
+                """,
+                (batch_reference,),
+            ).fetchone()
+
+            if batch is None:
+                raise ValueError("No batch exists with that reference.")
+
+            rows = connection.execute(
+                """
+                SELECT item_id, source_path, kind, code, message, duplicate_of
+                FROM email_batch_issue
+                WHERE batch_reference = ?
+                ORDER BY issue_id
+                """,
+                (batch_reference,),
+            ).fetchall()
+
+        return [dict(row) for row in rows]
+
+    def update_email_batch_status(
+        self,
+        batch_reference: str,
+        status: str,
+    ) -> None:
+        """Persist a workflow status selected by the coordinator."""
+        if not isinstance(batch_reference, str):
+            raise TypeError("batch_reference must be a string.")
+
+        batch_reference = batch_reference.strip()
+
+        if not batch_reference:
+            raise ValueError("batch_reference cannot be empty.")
+
+        valid_statuses = {
+            "imported",
+            "processing",
+            "completed",
+            "partially_failed",
+            "failed",
+        }
+
+        if not isinstance(status, str) or status not in valid_statuses:
+            raise ValueError("Invalid email batch status.")
+
+        with self._get_connection() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE email_batch
+                SET processing_status = ?
+                WHERE batch_reference = ?
+                """,
+                (status, batch_reference),
+            )
+
+            if cursor.rowcount != 1:
+                raise ValueError("No batch exists with that reference.")
+
+
     def link_submission_to_batch(
         self,
         batch_reference: str,
@@ -835,7 +1032,6 @@ class DataManager:
             "metadata": metadata,
             "education": education,
         }
-
 
     def save_email_metadata(
         self,
