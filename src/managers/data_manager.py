@@ -11,11 +11,40 @@ import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional
+from uuid import uuid4
 
 from ..models import AssessmentResult, Submission, ThreatEvidence
 
 LOGGER = logging.getLogger(__name__)
 SCHEMA = """
+    CREATE TABLE IF NOT EXISTS email_batch (
+        batch_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        batch_reference TEXT NOT NULL UNIQUE,
+        created_at TEXT NOT NULL,
+
+        processing_status TEXT NOT NULL DEFAULT 'imported' CHECK (
+            processing_status IN (
+                'imported',
+                'processing',
+                'completed',
+                'partially_failed',
+                'failed'
+            )
+        ),
+
+        total_files INTEGER NOT NULL CHECK (total_files >= 0),
+        accepted_count INTEGER NOT NULL CHECK (accepted_count >= 0),
+        duplicate_count INTEGER NOT NULL CHECK (duplicate_count >= 0),
+        import_failed_count INTEGER NOT NULL CHECK (
+            import_failed_count >= 0
+        ),
+
+        CHECK (
+            total_files =
+                accepted_count + duplicate_count + import_failed_count
+        )
+    );
+
     CREATE TABLE IF NOT EXISTS submission (
         submission_id INTEGER PRIMARY KEY AUTOINCREMENT,
         data_origin TEXT NOT NULL,
@@ -335,6 +364,70 @@ class DataManager:
         """Create the existing application tables and indexes if absent."""
         with self._get_connection() as connection:
             connection.executescript(SCHEMA)
+
+    def create_email_batch(
+        self,
+        *,
+        total_files: int,
+        accepted_count: int,
+        duplicate_count: int,
+        import_failed_count: int,
+    ) -> str:
+        """Save import totals and return a unique batch reference."""
+        counts = {
+            "total_files": total_files,
+            "accepted_count": accepted_count,
+            "duplicate_count": duplicate_count,
+            "import_failed_count": import_failed_count,
+        }
+
+        for name, value in counts.items():
+            if type(value) is not int or value < 0:
+                raise ValueError(
+                    f"{name} must be a non-negative integer."
+                )
+
+        expected_total = (
+            accepted_count
+            + duplicate_count
+            + import_failed_count
+        )
+
+        if total_files != expected_total:
+            raise ValueError(
+                "total_files must equal accepted_count + "
+                "duplicate_count + import_failed_count."
+            )
+
+        batch_reference = f"BATCH-{uuid4().hex.upper()}"
+        created_at = datetime.now(timezone.utc).isoformat()
+
+        with self._get_connection() as connection:
+            connection.execute(
+                """
+                INSERT INTO email_batch (
+                    batch_reference,
+                    created_at,
+                    processing_status,
+                    total_files,
+                    accepted_count,
+                    duplicate_count,
+                    import_failed_count
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    batch_reference,
+                    created_at,
+                    "imported",
+                    total_files,
+                    accepted_count,
+                    duplicate_count,
+                    import_failed_count,
+                ),
+            )
+
+        return batch_reference
 
     def save_submission(self, submission: Submission) -> int:
         """Insert/update a submission and its attached children atomically.
