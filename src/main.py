@@ -21,7 +21,8 @@ from src.managers.logic_manager import LogicManager
 from src.services.gemini_client import GeminiClient
 from src.services.groq_client import GroqClient
 from src.services.virustotal_scanner import VirusTotalScanner
-
+from src.services.email_ingestion_service import EmailIngestionService
+from src.services.eml_parser import EmlParser
 # ---------------------------------------------------------------------------
 # Logging configuration
 # ---------------------------------------------------------------------------
@@ -66,6 +67,8 @@ def main() -> None:
     )
 
     scanner = VirusTotalScanner(api_key=vt_key) if vt_key else None
+    email_parser = EmlParser()
+    ingestion_service = EmailIngestionService(parser=email_parser)
 
     # --- Manager layer -------------------------------------------------------
     data_manager = DataManager(db_path="data/database.db")
@@ -81,7 +84,8 @@ def main() -> None:
         ai_manager=ai_manager,
         logic_manager=logic_manager,
         data_manager=data_manager,
-        scanner=scanner,          # Aggregation: scanner lifetime owned by main()
+        scanner=scanner,
+        ingestion_service=ingestion_service,
     )
 
     coordinator.run()
