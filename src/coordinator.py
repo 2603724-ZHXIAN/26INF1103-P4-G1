@@ -357,6 +357,16 @@ class EngineCoordinator:
             import_failed_count=import_failed_count,
         )
 
+        self._data.save_batch_import_issues(
+            batch_reference,
+            issues,
+        )
+
+        self._data.update_email_batch_status(
+            batch_reference,
+            "processing",
+        )
+
         results = []
 
         for email in accepted:
@@ -403,6 +413,50 @@ class EngineCoordinator:
             if result["database_error"]:
                 break
 
+        successful_count = 0
+        analysis_failed_count = 0
+        database_failed = False
+
+        for result in results:
+            if result["success"]:
+                successful_count += 1
+            else:
+                analysis_failed_count += 1
+
+            if result["database_error"]:
+                database_failed = True
+
+        unprocessed_count = len(accepted) - len(results)
+
+        if database_failed or unprocessed_count > 0:
+            final_status = "failed"
+        elif not accepted:
+            final_status = "failed"
+        elif successful_count == 0:
+            final_status = "failed"
+        elif analysis_failed_count > 0 or import_failed_count > 0:
+            final_status = "partially_failed"
+        else:
+            final_status = "completed"
+
+        status_saved = False
+        status_error = None
+
+        try:
+            self._data.update_email_batch_status(
+                batch_reference,
+                final_status,
+            )
+            status_saved = True
+
+        except DataManagerError as error:
+            status_error = str(error)
+
+            LOGGER.exception(
+                "Could not save final status for batch %s.",
+                batch_reference,
+            )
+
         return {
             "batch_reference": batch_reference,
             "accepted_count": len(accepted),
@@ -410,7 +464,12 @@ class EngineCoordinator:
             "import_failed_count": import_failed_count,
             "issues": issues,
             "results": results,
-            "unprocessed_count": len(accepted) - len(results),
+            "unprocessed_count": unprocessed_count,
+            "successful_count": successful_count,
+            "analysis_failed_count": analysis_failed_count,
+            "processing_status": final_status,
+            "status_saved": status_saved,
+            "status_error": status_error,
         }
 
     def _handle_resource_pipeline(self, request: dict) -> None:
