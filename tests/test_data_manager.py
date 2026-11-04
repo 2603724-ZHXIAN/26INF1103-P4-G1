@@ -1,5 +1,6 @@
 """Offline repository tests. Only temporary databases are modified."""
 
+import json
 import logging
 import sqlite3
 import tempfile
@@ -163,6 +164,228 @@ class DataManagerTests(unittest.TestCase):
             self.assertEqual(manager.get_submission_by_id(sub_id).input_value, "memory")
         finally:
             manager.close()
+
+    def test_full_saved_education_survives_reopening_in_report(self):
+        """Historical reports must retrieve the complete saved AI education."""
+        submission = self.complete_submission()
+        submission_id = self.manager.save_submission(submission)
+
+        education = {
+            "threat_explanations": [
+                {
+                    "threat_type": "Credential phishing",
+                    "meaning": "A deceptive attempt to obtain credentials.",
+                    "typical_goal": "Gain access to an account.",
+                    "evidence": ["The email asks for a password."],
+                }
+            ],
+            "threat_summary": "A possible credential theft attempt.",
+            "what_it_is": "A message requesting account credentials.",
+            "why_dangerous": ["Account access could be lost."],
+            "preventive_steps": ["Verify through the official website."],
+            "recovery_steps": ["Change any password that was disclosed."],
+            "limitations": ["The destination website was not scanned."],
+            "recovery_by_action": {
+                "viewed_only": {
+                    "steps": ["Avoid following the email link."]
+                },
+                "clicked_link": {
+                    "steps": ["Close the suspicious page."]
+                },
+                "entered_information": {
+                    "steps": ["Change the disclosed password."]
+                },
+                "opened_or_downloaded_file": {
+                    "steps": ["Do not execute the downloaded file."]
+                },
+                "made_payment_or_shared_banking_details": {
+                    "steps": ["Contact the bank through an official channel."]
+                },
+            },
+        }
+
+        self.manager.save_text_analysis(
+            submission_id,
+            {
+                "message_classification": "suspicious",
+                "education": education,
+            },
+            "offline-test-model",
+        )
+
+        self.manager.close()
+        reopened = DataManager(str(self.path))
+
+        try:
+            reopened.initialize_database()
+            report = reopened.get_submission_report(submission_id)
+
+            self.assertIsNotNone(report)
+
+            for field, expected in education.items():
+                with self.subTest(field=field):
+                    self.assertEqual(report[field], expected)
+
+            self.assertEqual(
+                report["recommended_action"],
+                submission.assessment.recommended_action,
+            )
+
+        finally:
+            reopened.close()
+
+    def test_text_analysis_resave_updates_extracted_fields(self):
+        """A resave must keep extracted columns consistent with raw JSON."""
+        submission_id = self.manager.save_submission(
+            Submission("text", "Example message")
+        )
+
+        first = {
+            "message_classification": "suspicious",
+            "language": "English",
+            "message_type": "email",
+            "claimed_entity": "First organisation",
+            "requested_actions": ["Visit the first page"],
+            "possible_intents": ["First intent"],
+            "extracted_urls": ["https://example.com/first"],
+            "extracted_contacts": ["first@example.com"],
+            "suspected_threat_types": ["phishing"],
+            "other_warning_signs": ["First warning"],
+            "user_exposure": {"description_summary": "Unknown"},
+        }
+
+        second = {
+            "message_classification": "scam",
+            "language": "Malay",
+            "message_type": "chat_message",
+            "claimed_entity": "Second organisation",
+            "requested_actions": ["Enter credentials"],
+            "possible_intents": ["Credential theft"],
+            "extracted_urls": ["https://example.com/second"],
+            "extracted_contacts": ["second@example.com"],
+            "suspected_threat_types": ["credential_phishing"],
+            "other_warning_signs": ["Second warning"],
+            "user_exposure": {"description_summary": "Link clicked"},
+        }
+
+        self.manager.save_text_analysis(
+            submission_id, first, "offline-model-1"
+        )
+        self.manager.save_text_analysis(
+            submission_id, second, "offline-model-2"
+        )
+
+        with self.manager._get_connection() as connection:
+            row = connection.execute(
+                """
+                SELECT *
+                FROM text_analysis
+                WHERE submission_id = ?
+                """,
+                (submission_id,),
+            ).fetchone()
+
+            count = connection.execute(
+                """
+                SELECT COUNT(*)
+                FROM text_analysis
+                WHERE submission_id = ?
+                """,
+                (submission_id,),
+            ).fetchone()[0]
+
+        self.assertEqual(count, 1)
+
+        for field in (
+            "language",
+            "message_type",
+            "claimed_entity",
+            "message_classification",
+        ):
+            with self.subTest(field=field):
+                self.assertEqual(row[field], second[field])
+
+        for field in (
+            "requested_actions",
+            "possible_intents",
+            "extracted_urls",
+            "extracted_contacts",
+            "suspected_threat_types",
+            "other_warning_signs",
+            "user_exposure",
+        ):
+            with self.subTest(field=field):
+                self.assertEqual(
+                    json.loads(row[field]),
+                    second[field],
+                )
+
+        self.assertEqual(
+            json.loads(row["raw_gemini_response"]),
+            second,
+        )
+
+    def test_vt_resave_updates_timeout_count(self):
+        """Repeated telemetry saves update counts without duplicate rows."""
+        submission_id = self.manager.save_submission(
+            Submission("url", "https://example.com")
+        )
+
+        for timeout_count in (1, 7):
+            self.manager.save_vt_scan_result(
+                submission_id,
+                {
+                    "resource_identifier": "https://example.com",
+                    "parsed_result": {
+                        "resource_type": "url",
+                        "detection_stats": {
+                            "malicious": 0,
+                            "suspicious": 1,
+                            "harmless": 4,
+                            "undetected": 3,
+                            "timeout": timeout_count,
+                        },
+                    },
+                },
+            )
+
+        with self.manager._get_connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT timeout_count
+                FROM vt_scan_result
+                WHERE submission_id = ?
+                """,
+                (submission_id,),
+            ).fetchall()
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["timeout_count"], 7)
+
+    def test_report_rejects_corrupt_saved_ai_json(self):
+        """Corrupt saved education must raise a clear repository error."""
+        submission_id = self.manager.save_submission(
+            Submission("text", "Example message")
+        )
+
+        self.manager.save_text_analysis(
+            submission_id,
+            {"message_classification": "suspicious"},
+            "offline-test-model",
+        )
+
+        with self.manager._get_connection() as connection:
+            connection.execute(
+                """
+                UPDATE text_analysis
+                SET raw_gemini_response = ?
+                WHERE submission_id = ?
+                """,
+                ("{invalid JSON", submission_id),
+            )
+
+        with self.assertRaises(DataManagerError):
+            self.manager.get_submission_report(submission_id)
 
     def test_reporting_and_trending_queries(self):
         sub_id = self.manager.save_submission(self.complete_submission())
