@@ -213,3 +213,32 @@ class WordReportWriter:
         document.add_paragraph(
             f"Failed: {summary['failed']}"
         )
+
+    def _add_risk_section(
+        self, document, report: BatchReport, summary: dict
+    ) -> None:
+        """Add risk counts and percentages to the Word document."""
+
+        document.add_heading("Risk Distribution", level=1)
+
+        risk_distribution = report.get_risk_distribution()
+
+        table = document.add_table(rows=1, cols=3)
+        table.style = "Table Grid"
+
+        header = table.rows[0].cells
+        header[0].text = "Risk Level"
+        header[1].text = "Email Count"
+        header[2].text = "Percentage"
+
+        risk_levels = [
+            ("High", summary["high_risk"], risk_distribution["high"]),
+            ("Medium", summary["medium_risk"], risk_distribution["medium"]),
+            ("Low", summary["low_risk"], risk_distribution["low"])
+        ]
+
+        for level, count, percentage in risk_levels:
+            cells = table.add_row().cells
+            cells[0].text = level
+            cells[1].text = str(count)
+            cells[2].text = f"{percentage:.2f}%"
