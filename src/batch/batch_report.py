@@ -25,3 +25,27 @@ class BatchReport:
             "medium_risk": self._batch_info.get("medium_risk_count") or 0,
             "low_risk": self._batch_info.get("low_risk_count") or 0,
         }
+
+    def get_risk_distribution(self) -> dict:
+        """Calculate risk percentages among classified emails."""
+
+        summary = self.generate_summary()
+
+        high = summary["high_risk"]
+        medium = summary["medium_risk"]
+        low = summary["low_risk"]
+
+        classified_total = high + medium + low
+
+        if classified_total == 0:
+            return {
+                "high": 0.0,
+                "medium": 0.0,
+                "low": 0.0,
+            }
+
+        return {
+            "high": round(high / classified_total * 100, 2),
+            "medium": round(medium / classified_total * 100, 2),
+            "low": round(low / classified_total * 100, 2),
+        }

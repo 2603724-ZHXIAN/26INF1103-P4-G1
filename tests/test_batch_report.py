@@ -71,5 +71,30 @@ class TestBatchReport(unittest.TestCase):
         self.assertEqual(summary["medium_risk"], 0)
         self.assertEqual(summary["low_risk"], 0)
 
+    def test_get_risk_distribution(self):
+        batch_info = {
+            "high_risk_count": 8,
+            "medium_risk_count": 6,
+            "low_risk_count": 3,
+            "analysis_failed_count": 3,
+        }
+
+        report = BatchReport(batch_info, [])
+
+        distribution = report.get_risk_distribution()
+
+        self.assertEqual(distribution["high"], 47.06)
+        self.assertEqual(distribution["medium"], 35.29)
+        self.assertEqual(distribution["low"], 17.65)
+
+    def test_get_risk_distribution_empty_batch(self):
+        report = BatchReport({}, [])
+
+        distribution = report.get_risk_distribution()
+
+        self.assertEqual(distribution["high"], 0.0)
+        self.assertEqual(distribution["medium"], 0.0)
+        self.assertEqual(distribution["low"], 0.0)
+
 if __name__ == "__main__":
     unittest.main()
