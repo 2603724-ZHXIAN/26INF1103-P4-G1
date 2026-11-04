@@ -18,21 +18,7 @@ class WordReportWriter:
         )
 
         summary = report.generate_summary()
-
-        document.add_heading("Batch Summary", level=1)
-
-        document.add_paragraph(
-            f"Batch Reference: {summary['batch_reference']}"
-        )
-        document.add_paragraph(
-            f"Total Emails: {summary['total_emails']}"
-        )
-        document.add_paragraph(
-            f"Completed: {summary['completed']}"
-        )
-        document.add_paragraph(
-            f"Failed: {summary['failed']}"
-        )
+        self._add_summary_section(document, summary)
 
         # Risk Distribution
         document.add_heading("Risk Distribution", level=1)
@@ -209,3 +195,21 @@ class WordReportWriter:
         document.save(destination)
 
         return str(destination)
+
+    def _add_summary_section(self, document, summary: dict) -> None:
+        """Add batch summary information to the Word document."""
+
+        document.add_heading("Batch Summary", level=1)
+
+        document.add_paragraph(
+            f"Batch Reference: {summary['batch_reference']}"
+        )
+        document.add_paragraph(
+            f"Total Emails: {summary['total_emails']}"
+        )
+        document.add_paragraph(
+            f"Completed: {summary['completed']}"
+        )
+        document.add_paragraph(
+            f"Failed: {summary['failed']}"
+        )
