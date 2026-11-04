@@ -396,6 +396,50 @@ class TestResourcePipelineAIIntegration(unittest.TestCase):
             "file_path": "/tmp/invoice.exe",
         }
 
+    def test_result_save_failure_does_not_report_completion(self):
+        """A failed result save must not produce a successful completion."""
+        self.coord._io.display_assessment = MagicMock()
+
+        with patch.object(
+            self.coord._data,
+            "save_vt_scan_result",
+            side_effect=DataManagerError("Simulated telemetry save failure."),
+        ):
+            self.coord._handle_resource_pipeline(self.request)
+
+        saved = self.coord._data.get_submission_by_id(1)
+
+        self.assertIsNotNone(saved)
+        self.assertEqual(saved.processing_status, "failed")
+        self.assertIn("could not be saved", saved.error_message.lower())
+        self.coord._io.display_assessment.assert_not_called()
+
+    def test_completion_save_failure_does_not_display_success(self):
+        """The final completion update must also succeed."""
+        self.coord._io.display_assessment = MagicMock()
+        original_save = self.coord._data.save_submission
+
+        def fail_completed_save(submission):
+            if submission.processing_status == "completed":
+                raise DataManagerError(
+                    "Simulated completion save failure."
+                )
+
+            return original_save(submission)
+
+        with patch.object(
+            self.coord._data,
+            "save_submission",
+            side_effect=fail_completed_save,
+        ):
+            self.coord._handle_resource_pipeline(self.request)
+
+        saved = self.coord._data.get_submission_by_id(1)
+
+        self.assertIsNotNone(saved)
+        self.assertEqual(saved.processing_status, "failed")
+        self.coord._io.display_assessment.assert_not_called()
+
     def test_ai_failure_marks_submission_failed_and_skips_logic(self):
         self.coord._ai.analyze_technical_threat = MagicMock(
             return_value={"error": "Gemini request timed out."}
