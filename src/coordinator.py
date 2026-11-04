@@ -256,10 +256,14 @@ class EngineCoordinator:
                 )
 
             # Preserve the existing business rules.
+            # Preserve the existing business rules.
             assessment = self._logic.evaluate_text_threat(
                 submission,
                 ai_result,
             )
+
+            # Attach saved AI explanations and recovery guidance.
+            self._attach_text_education(assessment, ai_result)
 
             submission.set_assessment(assessment)
 
@@ -372,6 +376,26 @@ class EngineCoordinator:
                     continue
 
                 self._io.display_batch_email_rows(matches)
+
+                while matches:
+                    item_id = self._io.select_batch_email(matches)
+
+                    if item_id is None:
+                        break
+
+                    details = self._data.get_batch_email_details(
+                        reference,
+                        item_id,
+                    )
+
+                    if details is None:
+                        self._io._print(
+                            "The selected email is unavailable."
+                        )
+                        continue
+
+                    self._io.review_batch_email(details)
+                    self._io.display_batch_email_rows(matches)
 
             except (DataManagerError, ValueError) as error:
                 LOGGER.exception("Could not load batch emails.")
@@ -789,6 +813,52 @@ class EngineCoordinator:
     # -------------------------------------------------------------------------
     # Private Helpers
     # -------------------------------------------------------------------------
+
+    @staticmethod
+    def _attach_text_education(assessment, ai_result: dict) -> None:
+        """Attach AI education while preserving the rule-based action."""
+        if not isinstance(ai_result, dict):
+            return
+
+        education = ai_result.get("education")
+
+        if not isinstance(education, dict):
+            return
+
+        steps = []
+
+        recommended_action = assessment.recommended_action
+
+        if isinstance(recommended_action, str):
+            recommended_action = recommended_action.strip()
+
+            if recommended_action:
+                steps.append(recommended_action)
+
+        ai_steps = education.get("recovery_steps")
+
+        if isinstance(ai_steps, list):
+            for step in ai_steps:
+                if isinstance(step, str):
+                    step = step.strip()
+
+                    if step and step not in steps:
+                        steps.append(step)
+
+        what_it_is = education.get("what_it_is")
+        threat_summary = education.get("threat_summary")
+
+        if not isinstance(what_it_is, str) or not what_it_is.strip():
+            what_it_is = None
+
+        if not isinstance(threat_summary, str) or not threat_summary.strip():
+            threat_summary = None
+
+        assessment.attach_educational_guidance(
+            what_it_is=what_it_is,
+            threat_summary=threat_summary,
+            recovery_steps=steps or None,
+        )
 
     def _safe_update_submission(self, submission: Submission) -> None:
         """Persist a submission status update, swallowing DB errors to avoid masking pipeline errors."""
