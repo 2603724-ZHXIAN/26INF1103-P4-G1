@@ -20,50 +20,12 @@ class WordReportWriter:
         summary = report.generate_summary()
         self._add_summary_section(document, summary)
 
+       
         # Risk Distribution
-        document.add_heading("Risk Distribution", level=1)
-
-        risk_distribution = report.get_risk_distribution()
-
-        table = document.add_table(rows=1, cols=3)
-        table.style = "Table Grid"
-
-        header = table.rows[0].cells
-        header[0].text = "Risk Level"
-        header[1].text = "Email Count"
-        header[2].text = "Percentage"
-
-        risk_levels = [
-            ("High", summary["high_risk"], risk_distribution["high"]),
-            ("Medium", summary["medium_risk"], risk_distribution["medium"]),
-            ("Low", summary["low_risk"], risk_distribution["low"])
-        ]
-
-        for level, count, percentage in risk_levels:
-            cells = table.add_row().cells
-            cells[0].text = level
-            cells[1].text = str(count)
-            cells[2].text = f"{percentage:.2f}%"
+        self._add_risk_section(document, report, summary)
 
         # Top Threat Types
-        document.add_heading("Top Threat Types", level=1)
-
-        common_threats = report.get_common_threats()
-
-        if common_threats:
-            threat_table = document.add_table(rows=1, cols=2)
-            threat_table.style = "Table Grid"
-
-            header = threat_table.rows[0].cells
-            header[0].text = "Threat Type"
-            header[1].text = "Email Count"
-
-            for threat in common_threats:
-                cells = threat_table.add_row().cells
-                cells[0].text = threat["threat_type"].title()
-                cells[1].text = str(threat["count"])
-        else:
-            document.add_paragraph("No classified threats available.")
+        self._add_threat_section(document, report)
 
         # Ranked Email Results
         document.add_heading("Ranked Email Results", level=1)
@@ -242,3 +204,27 @@ class WordReportWriter:
             cells[0].text = level
             cells[1].text = str(count)
             cells[2].text = f"{percentage:.2f}%"
+
+    def _add_threat_section(
+        self, document, report: BatchReport
+    ) -> None:
+        """Add the most common threat types to the Word document."""
+
+        document.add_heading("Top Threat Types", level=1)
+
+        common_threats = report.get_common_threats()
+
+        if common_threats:
+            threat_table = document.add_table(rows=1, cols=2)
+            threat_table.style = "Table Grid"
+
+            header = threat_table.rows[0].cells
+            header[0].text = "Threat Type"
+            header[1].text = "Email Count"
+
+            for threat in common_threats:
+                cells = threat_table.add_row().cells
+                cells[0].text = threat["threat_type"].title()
+                cells[1].text = str(threat["count"])
+        else:
+            document.add_paragraph("No classified threats available.")
