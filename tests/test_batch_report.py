@@ -322,5 +322,50 @@ class TestBatchReport(unittest.TestCase):
         report = BatchReport({}, [])
 
         self.assertEqual(report.get_campaign_groups(), [])
+
+    def test_get_high_risk_results(self):
+        """Only high-risk emails should be returned, highest score first."""
+
+        batch_info = {
+            "batch_reference": "TEST-001"
+        }
+
+        email_records = [
+            {
+                "submission_id": 1,
+                "processing_status": "completed",
+                "overall_risk": "medium",
+                "risk_score": 60
+            },
+            {
+                "submission_id": 2,
+                "processing_status": "completed",
+                "overall_risk": "high",
+                "risk_score": 85
+            },
+            {
+                "submission_id": 3,
+                "processing_status": "completed",
+                "overall_risk": "high",
+                "risk_score": 95
+            },
+            {
+                "submission_id": 4,
+                "processing_status": "completed",
+                "overall_risk": "low",
+                "risk_score": 20
+            }
+        ]
+
+        report = BatchReport(batch_info, email_records)
+
+        results = report.get_high_risk_results()
+
+        self.assertEqual(len(results), 2)
+        self.assertEqual(
+            [result["submission_id"] for result in results],
+            [3, 2]
+        )
+        
 if __name__ == "__main__":
     unittest.main()

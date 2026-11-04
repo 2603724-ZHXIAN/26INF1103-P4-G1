@@ -123,6 +123,18 @@ class BatchReport:
 
         return ranked_records
 
+    def get_high_risk_results(self) -> list[dict]:
+        """Return high-risk emails ordered by risk score."""
+
+        ranked_results = self.get_ranked_results()
+
+        return [
+            result
+            for result in ranked_results
+            if isinstance(result.get("overall_risk"), str)
+            and result["overall_risk"].strip().casefold() == "high"
+        ]
+
     def get_campaign_groups(self) -> list[dict]:
         """Return groups of emails with similar wording."""
         return self._campaign_detector.group_similar_emails(
