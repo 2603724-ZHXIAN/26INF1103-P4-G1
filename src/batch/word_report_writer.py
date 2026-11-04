@@ -37,47 +37,7 @@ class WordReportWriter:
         self._add_failed_section(document, report)
 
         # AI Educational Guidance
-        document.add_heading("AI Educational Guidance", level=1)
-
-        guidance_found = False
-
-        for record in report.email_records:
-            if record.get("processing_status") != "completed":
-                continue
-
-            threat_summary = record.get("threat_summary")
-            preventive_steps = record.get("preventive_steps") or []
-            recovery_steps = record.get("recovery_steps") or []
-
-            if not threat_summary and not preventive_steps and not recovery_steps:
-                continue
-
-            guidance_found = True
-
-            document.add_heading(
-                f"Submission {record.get('submission_id')}",
-                level=2
-            )
-
-            if threat_summary:
-                document.add_paragraph(
-                    f"Threat Summary: {threat_summary}"
-                )
-
-            if isinstance(preventive_steps, list) and preventive_steps:
-                document.add_paragraph("Preventive Steps:")
-
-                for step in preventive_steps:
-                    document.add_paragraph(str(step), style="List Bullet")
-
-            if isinstance(recovery_steps, list) and recovery_steps:
-                document.add_paragraph("Recovery Steps:")
-
-                for step in recovery_steps:
-                    document.add_paragraph(str(step), style="List Bullet")
-
-        if not guidance_found:
-            document.add_paragraph("No educational guidance available.")
+        self._add_guidance_section(document, report)
 
         destination = Path(output_path)
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -249,3 +209,56 @@ class WordReportWriter:
                 )
         else:
             document.add_paragraph("No failed email analyses.")
+
+    def _add_guidance_section(
+        self, document, report: BatchReport
+    ) -> None:
+        """Add AI-generated educational guidance to the Word document."""
+
+        document.add_heading("AI Educational Guidance", level=1)
+
+        guidance_found = False
+
+        for record in report.email_records:
+            if record.get("processing_status") != "completed":
+                continue
+
+            threat_summary = record.get("threat_summary")
+            preventive_steps = record.get("preventive_steps") or []
+            recovery_steps = record.get("recovery_steps") or []
+
+            if not threat_summary and not preventive_steps and not recovery_steps:
+                continue
+
+            guidance_found = True
+
+            document.add_heading(
+                f"Submission {record.get('submission_id')}",
+                level=2
+            )
+
+            if threat_summary:
+                document.add_paragraph(
+                    f"Threat Summary: {threat_summary}"
+                )
+
+            if isinstance(preventive_steps, list) and preventive_steps:
+                document.add_paragraph("Preventive Steps:")
+
+                for step in preventive_steps:
+                    document.add_paragraph(
+                        str(step),
+                        style="List Bullet"
+                    )
+
+            if isinstance(recovery_steps, list) and recovery_steps:
+                document.add_paragraph("Recovery Steps:")
+
+                for step in recovery_steps:
+                    document.add_paragraph(
+                        str(step),
+                        style="List Bullet"
+                    )
+
+        if not guidance_found:
+            document.add_paragraph("No educational guidance available.")
