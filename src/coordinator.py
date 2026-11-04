@@ -27,20 +27,19 @@ LOGGER = logging.getLogger(__name__)
 
 
 class EngineCoordinator:
-    """Top-level orchestrator that wires all four managers into a coherent engine loop.
+    """Coordinate application workflows using injected collaborators.
 
-    Demonstrates:
-    - Composition:  Owns IOManager, AIManager, LogicManager, DataManager.
-    - Aggregation:  Holds VirusTotalScanner injected from outside (scanner's lifecycle
-                    is managed by the caller, not this coordinator; YAGNI applied).
-    - Association:  Passes Submission and AssessmentResult objects dynamically across
-                    pipeline steps ("Uses-A").
-    - Encapsulation: All dependencies are private attributes; no public setters expose
-                     internal wiring.
-    - SRP:           Solely responsible for routing user requests to the correct pipeline
-                     and persisting results; each pipeline step is a private method.
-    - OCP:           New action types are added by implementing a new _handle_* method;
-                     the run() loop requires no modification.
+    Aggregation: Managers and services are supplied externally and can
+    exist independently of this coordinator.
+
+    Association: Passes submissions and assessments between collaborators
+    during processing.
+
+    Encapsulation: Underscore attributes and helper methods identify
+    implementation details by Python convention.
+
+    SRP: Coordinates workflow order while delegating presentation, AI
+    processing, risk evaluation and storage to their respective managers.
     """
 
     def __init__(
@@ -61,7 +60,9 @@ class EngineCoordinator:
             data_manager:  Persistence layer (Composition).
             scanner:       VirusTotalScanner service (Aggregation — injected, not owned).
         """
-        # Composition: all four managers are created outside and composed here
+
+        # Aggregation: retain injected application components without
+        # taking ownership of their lifecycles.
         self._io: IOManager = io_manager
         self._ai: AIManager = ai_manager
         self._logic: LogicManager = logic_manager
@@ -76,10 +77,10 @@ class EngineCoordinator:
     # -------------------------------------------------------------------------
 
     def run(self) -> None:
-        """Main event loop: display menu, dispatch actions, repeat until exit.
+        """Collect requests and dispatch them to the appropriate workflow.
 
-        OCP: Dispatching is table-driven; adding a new action type never modifies this
-        method — only a new _handle_* method and a new entry in the dispatch table.
+        Uses explicit action branches; introducing a new action requires
+        updating this dispatch method.
         """
         LOGGER.info("EngineCoordinator.run() started.")
 
@@ -197,6 +198,8 @@ class EngineCoordinator:
                 ai_arguments["interaction"] = "unknown"
                 ai_arguments["include_scenarios"] = True
 
+            # Every text record reaching analysis uses AIManager before
+            # business-rule evaluation; API failure cannot count as success.
             ai_result = self._ai.analyze_message(**ai_arguments)
 
             if not isinstance(ai_result, dict):
@@ -255,8 +258,8 @@ class EngineCoordinator:
                     severity=severity,
                 )
 
-            # Preserve the existing business rules.
-            # Preserve the existing business rules.
+            # LogicManager applies domain rules to the AI-enriched record.
+            # The coordinator does not calculate the final risk category.
             assessment = self._logic.evaluate_text_threat(
                 submission,
                 ai_result,
@@ -466,6 +469,8 @@ class EngineCoordinator:
     # Pipeline: URL / File Resource Analysis (VirusTotal)
     # -------------------------------------------------------------------------
 
+    # Batch processing delegates accepted emails to the shared text processor,
+    # keeping AI analysis and persistence orchestration in one implementation.
     def _handle_batch_pipeline(self, request: dict) -> dict:
         """Import and process a batch sequentially using shared analysis.
 
@@ -744,22 +749,56 @@ class EngineCoordinator:
                 recovery_steps=education.get("recovery_steps"),
             )
 
-        # Step 9: Persist assessment, evidence, scanner telemetry and AI analysis
+        # Step 9: Save analysis results and persist successful completion.
         model_name = self._get_model_name()
+
         try:
-            self._data.save_assessment(submission_id, assessment, model_name)
-            self._data.save_evidences(submission_id, submission.evidences)
-            self._data.save_vt_scan_result(submission_id, vt_result)
-            self._data.save_technical_analysis(submission_id, ai_result, model_name)
-        except DataManagerError as db_err:
-            LOGGER.error("Failed to persist assessment for submission #%d: %s", submission_id, db_err)
-            self._io._print(f"\n[Database] Results could not be saved: {db_err}")
+            self._data.save_assessment(
+                submission_id,
+                assessment,
+                model_name,
+            )
+            self._data.save_evidences(
+                submission_id,
+                submission.evidences,
+            )
+            self._data.save_vt_scan_result(
+                submission_id,
+                vt_result,
+            )
+            self._data.save_technical_analysis(
+                submission_id,
+                ai_result,
+                model_name,
+            )
 
-        # Step 10: Mark completed, persist and display
-        submission.mark_completed()
-        self._safe_update_submission(submission)
-        LOGGER.info("Submission #%d (resource) completed successfully.", submission_id)
+            submission.mark_completed()
 
+            # Completion must be saved successfully.
+            self._data.save_submission(submission)
+
+        except DataManagerError as error:
+            LOGGER.exception(
+                "Could not save complete results for submission #%d.",
+                submission_id,
+            )
+
+            submission.mark_failed(
+                f"Results could not be saved completely: {error}"
+            )
+            self._safe_update_submission(submission)
+
+            self._io._print(
+                "\n[Database] Results could not be saved completely. "
+                "This submission has not completed successfully."
+            )
+            return
+        
+        # Step 10: Log success and display the saved assessment.
+        LOGGER.info(
+            "Submission #%d (resource) completed successfully.",
+            submission_id,
+        )
         self._io.display_assessment(submission)
 
     # -------------------------------------------------------------------------
@@ -814,6 +853,8 @@ class EngineCoordinator:
     # Private Helpers
     # -------------------------------------------------------------------------
 
+    # Enrich the assessment through its public method while retaining the
+    # action selected by business rules.
     @staticmethod
     def _attach_text_education(assessment, ai_result: dict) -> None:
         """Attach AI education while preserving the rule-based action."""
