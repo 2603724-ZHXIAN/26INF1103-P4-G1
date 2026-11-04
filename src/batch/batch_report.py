@@ -79,3 +79,35 @@ class BatchReport:
             {"threat_type": threat, "count": count}
             for threat, count in counts.most_common()
         ]
+    def get_ranked_results(self) -> list[dict]:
+        """Rank completed email analyses by risk score, highest first."""
+
+        ranked_records = []
+
+        for record in self._email_records:
+            if record.get("processing_status") != "completed":
+                continue
+
+            score = record.get("risk_score")
+
+            if isinstance(score, bool):
+                continue
+
+            if not isinstance(score, (int, float)):
+                continue
+
+            if not 0 <= score <= 100:
+                continue
+
+            ranked_records.append({
+                "submission_id": record.get("submission_id"),
+                "overall_risk": record.get("overall_risk"),
+                "risk_score": score,
+            })
+
+        ranked_records.sort(
+            key=lambda record: record["risk_score"],
+            reverse=True,
+        )
+
+        return ranked_records
