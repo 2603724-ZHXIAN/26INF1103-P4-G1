@@ -9,9 +9,11 @@ Strict Separation of Concerns:
 
 import curses
 import hashlib
+import json
 import locale
 import os
 import sys
+from textwrap import wrap
 from typing import Any, Dict, List, Optional, Tuple, Union
 from datetime import datetime, timedelta, timezone
 from pathlib import PureWindowsPath
@@ -626,6 +628,428 @@ class IOManager:
 
             self._print("Enter an option from 0 to 4.")
 
+    def _email_heading(self, title: str) -> None:
+        """Display a consistent heading for email screens."""
+        self._print()
+        self._print("=" * 72)
+        self._print(title.center(72))
+        self._print("=" * 72)
+
+    def _email_section(self, title: str, content) -> None:
+        """Display saved text or numbered text items."""
+        self._print()
+        self._print(title)
+        self._print("-" * 72)
+
+        if isinstance(content, str):
+            items = [content]
+            numbered = False
+        elif isinstance(content, list):
+            items = content
+            numbered = True
+        else:
+            items = []
+            numbered = False
+
+        displayed = False
+
+        for number, item in enumerate(items, start=1):
+            if not isinstance(item, str) or not item.strip():
+                continue
+
+            prefix = f"{number}. " if numbered else ""
+
+            lines = wrap(
+                item.strip(),
+                width=72,
+                initial_indent=prefix,
+                subsequent_indent=" " * len(prefix),
+            )
+
+            for line in lines:
+                self._print(line)
+
+            displayed = True
+
+        if not displayed:
+            self._print("Information is unavailable for this record.")
+
+    def _collect_email_choice(self, options: set[str]) -> str:
+        """Collect a valid submenu choice."""
+        while True:
+            choice = input("Select an option: > ").strip()
+
+            if choice in options:
+                return choice
+
+            self._print("Select one of the displayed options.")
+
+    def select_batch_email(
+        self,
+        emails: list[dict],
+    ) -> Optional[str]:
+        """Select an email using its reference or reference number."""
+        if not emails:
+            return None
+
+        self._print()
+        self._print(
+            "Enter an email number or reference, "
+            "such as 1 or EMAIL-001."
+        )
+        self._print("Enter 0 to return to Batch Options.")
+
+        while True:
+            choice = input("Select email: > ").strip().upper()
+
+            if choice == "0":
+                return None
+
+            for email in emails:
+                reference = email.get("item_id") or ""
+
+                if not reference:
+                    continue
+
+                if choice == reference.upper():
+                    return reference
+
+                prefix, separator, number = reference.upper().partition(
+                    "-"
+                )
+
+                if (
+                    choice.isdecimal()
+                    and prefix == "EMAIL"
+                    and separator
+                    and number.isdecimal()
+                ):
+                    if int(choice) == int(number):
+                        return reference
+
+            self._print(
+                "Select an email number or reference "
+                "from the displayed list."
+            )
+
+    def review_batch_email(self, details: dict) -> None:
+        """Display one saved email and its educational submenus."""
+        submission = details["submission"]
+        metadata = details["metadata"]
+        education = details["education"]
+        assessment = submission.assessment
+
+        risk = "UNASSESSED"
+
+        if (
+            submission.processing_status == "completed"
+            and assessment is not None
+        ):
+            risk = assessment.overall_risk.upper()
+
+        while True:
+            self._email_heading("INDIVIDUAL EMAIL DETAILS")
+
+            self._print(
+                f"Email Reference: {metadata['item_id']}"
+            )
+            self._print(
+                f"Subject:         "
+                f"{metadata.get('subject') or '(No subject)'}"
+            )
+            self._print(
+                f"Sender:          "
+                f"{metadata.get('sender') or 'Unavailable'}"
+            )
+            self._print(f"Risk Level:      {risk}")
+            self._print(
+                f"Analysis Status: "
+                f"{submission.processing_status.replace('_', ' ').title()}"
+            )
+
+            explanations = education.get("threat_explanations", [])
+            threat_types = []
+
+            if isinstance(explanations, list):
+                for explanation in explanations:
+                    if isinstance(explanation, dict):
+                        threat_type = explanation.get("threat_type")
+
+                        if isinstance(threat_type, str):
+                            if threat_type.strip():
+                                if threat_type not in threat_types:
+                                    threat_types.append(threat_type)
+
+            self._print(
+                f"Threat Type:     "
+                f"{', '.join(threat_types) or 'Unavailable'}"
+            )
+            self._print("User Exposure:   Unknown")
+            self._print(
+                "Importing this email does not confirm recipient actions."
+            )
+
+            summary = education.get("threat_summary")
+
+            if not summary and assessment is not None:
+                summary = assessment.threat_summary
+
+            self._email_section("ANALYSIS SUMMARY", summary)
+
+            warnings = []
+
+            for evidence in submission.evidences:
+                excerpt = evidence.evidence_excerpt
+
+                if isinstance(excerpt, str) and excerpt.strip():
+                    if excerpt not in warnings:
+                        warnings.append(excerpt)
+
+            self._email_section(
+                "DETECTED WARNING SIGNS",
+                warnings,
+            )
+
+            if submission.processing_status != "completed":
+                self._email_section(
+                    "ANALYSIS NOTICE",
+                    submission.error_message
+                    or "A completed assessment is unavailable.",
+                )
+
+            self._print()
+            self._print("EMAIL OPTIONS")
+            self._print("1. View Original Email Content")
+            self._print("2. Educational Analysis")
+            self._print("0. Back to Previous List")
+
+            choice = self._collect_email_choice({"0", "1", "2"})
+
+            if choice == "0":
+                return
+
+            if choice == "1":
+                self._display_saved_email_content(submission, metadata)
+
+            elif choice == "2":
+                self._review_email_education(
+                    metadata,
+                    education,
+                    risk,
+                    warnings,
+                )
+
+    def _display_saved_email_content(
+        self,
+        submission: Submission,
+        metadata: dict,
+    ) -> None:
+        """Display the saved parsed content without reading source files."""
+        self._email_heading("ORIGINAL EMAIL CONTENT")
+        self._print(f"Email Reference: {metadata['item_id']}")
+        self._print(
+            "Showing saved parsed content; original MIME formatting "
+            "is not retained."
+        )
+
+        try:
+            content = json.loads(submission.input_value)
+        except (TypeError, ValueError):
+            content = None
+
+        if isinstance(content, dict):
+            self._email_section("Subject", content.get("subject"))
+            self._email_section("Sender", content.get("sender"))
+            self._email_section("Reply-To", content.get("reply_to"))
+            self._email_section("Recipients", content.get("recipients"))
+            self._email_section("Email Body", content.get("body_text"))
+            self._email_section(
+                "Extracted URLs",
+                content.get("extracted_urls"),
+            )
+        else:
+            self._email_section("Email Content", submission.input_value)
+
+        input("\nPress Enter to return to Email Details...")
+
+    def _review_email_education(
+        self,
+        metadata: dict,
+        education: dict,
+        risk: str,
+        warnings: list[str],
+    ) -> None:
+        """Offer saved threat explanations and conditional guidance."""
+        while True:
+            self._email_heading("EDUCATIONAL ANALYSIS")
+            self._print(f"Email Reference: {metadata['item_id']}")
+            self._print(
+                f"Subject: {metadata.get('subject') or '(No subject)'}"
+            )
+            self._print(f"Risk Level: {risk}")
+
+            self._print()
+            self._print("1. Explain the Threat")
+            self._print("2. Preventive or Mitigation Steps")
+            self._print("0. Back to Email Details")
+
+            choice = self._collect_email_choice({"0", "1", "2"})
+
+            if choice == "0":
+                return
+
+            if choice == "1":
+                self._display_saved_threat_explanation(
+                    education,
+                    warnings,
+                )
+            else:
+                self._review_saved_action_guidance(
+                    metadata,
+                    education,
+                )
+
+    def _display_saved_threat_explanation(
+        self,
+        education: dict,
+        warnings: list[str],
+    ) -> None:
+        """Explain threats using saved AI education and evidence."""
+        self._email_heading("EXPLAIN THE THREAT")
+
+        explanations = education.get("threat_explanations", [])
+
+        if isinstance(explanations, list):
+            for explanation in explanations:
+                if not isinstance(explanation, dict):
+                    continue
+
+                self._email_section(
+                    "Threat Type",
+                    explanation.get("threat_type"),
+                )
+                self._email_section(
+                    "What This Means",
+                    explanation.get("meaning"),
+                )
+                self._email_section(
+                    "Typical Goal",
+                    explanation.get("typical_goal"),
+                )
+                self._email_section(
+                    "Supporting Email Evidence",
+                    explanation.get("evidence"),
+                )
+
+        self._email_section(
+            "Overview",
+            education.get("what_it_is"),
+        )
+        self._email_section("Why This Email Was Flagged", warnings)
+        self._email_section(
+            "Possible Consequences",
+            education.get("why_dangerous"),
+        )
+        self._email_section(
+            "Analysis Limitations",
+            education.get("limitations"),
+        )
+
+        input("\nPress Enter to return to Educational Analysis...")
+
+    def _review_saved_action_guidance(
+        self,
+        metadata: dict,
+        education: dict,
+    ) -> None:
+        """Show conditional guidance without recording an actual action."""
+        actions = [
+            (
+                "viewed_only",
+                "Only Viewed the Email / No Further Action",
+            ),
+            (
+                "clicked_link",
+                "Clicked a Link",
+            ),
+            (
+                "entered_information",
+                "Entered Information or Shared an OTP",
+            ),
+            (
+                "opened_or_downloaded_file",
+                "Downloaded or Opened an Attachment",
+            ),
+            (
+                "made_payment_or_shared_banking_details",
+                "Made a Payment or Shared Banking Details",
+            ),
+        ]
+
+        while True:
+            self._email_heading("PREVENTIVE OR MITIGATION STEPS")
+            self._print("Select the situation to view guidance for:")
+            self._print(
+                "This selection does not update recorded user exposure."
+            )
+            self._print()
+
+            for number, action in enumerate(actions, start=1):
+                self._print(f"{number}. {action[1]}")
+
+            self._print("0. Back to Educational Analysis")
+
+            choice = self._collect_email_choice(
+                {"0", "1", "2", "3", "4", "5"}
+            )
+
+            if choice == "0":
+                return
+
+            action_key, action_label = actions[int(choice) - 1]
+            scenarios = education.get("recovery_by_action", {})
+            steps = None
+
+            if isinstance(scenarios, dict):
+                scenario = scenarios.get(action_key)
+
+                if isinstance(scenario, dict):
+                    steps = scenario.get("steps")
+
+            self._email_heading("SELECTED GUIDANCE")
+            self._print(f"Email Reference: {metadata['item_id']}")
+            self._print(f"Selected Situation: {action_label}")
+
+            self._email_section(
+                "GENERAL PREVENTIVE STEPS",
+                education.get("preventive_steps"),
+            )
+
+            if (
+                isinstance(steps, list)
+                and steps
+                and all(
+                    isinstance(step, str) and step.strip()
+                    for step in steps
+                )
+            ):
+                self._email_section("RECOMMENDED STEPS", steps)
+            else:
+                self._print()
+                self._print(
+                    "Action-specific guidance is unavailable "
+                    "for this record."
+                )
+
+            self._print()
+            self._print("1. Choose Another Situation")
+            self._print("0. Back to Educational Analysis")
+
+            next_choice = self._collect_email_choice({"0", "1"})
+
+            if next_choice == "0":
+                return
+            
     def collect_batch_input_request(self) -> Optional[dict]:
         """Collect email paths without parsing or analysing files."""
         while True:
