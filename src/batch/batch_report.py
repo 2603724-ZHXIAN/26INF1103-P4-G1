@@ -128,3 +128,7 @@ class BatchReport:
         return self._campaign_detector.group_similar_emails(
             self._email_records
         )
+
+    def get_campaign_patterns(self, group: dict) -> dict:
+        """Return common threat patterns for a campaign group."""
+        return self._campaign_detector.identify_common_patterns(group)
