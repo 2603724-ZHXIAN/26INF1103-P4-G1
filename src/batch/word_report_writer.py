@@ -39,6 +39,11 @@ class WordReportWriter:
         # AI Educational Guidance
         self._add_guidance_section(document, report)
 
+        # Methodology and Limitations
+        self._add_methodology_section(document)
+
+        destination = Path(output_path)
+
         destination = Path(output_path)
         destination.parent.mkdir(parents=True, exist_ok=True)
 
@@ -262,3 +267,33 @@ class WordReportWriter:
 
         if not guidance_found:
             document.add_paragraph("No educational guidance available.")
+
+    def _add_methodology_section(self, document) -> None:
+        """Explain the report methodology and its limitations."""
+
+        document.add_heading("Methodology and Limitations", level=1)
+
+        document.add_heading("Methodology", level=2)
+
+        methodology = [
+            "Emails are analysed using AI and predefined business rules.",
+            "Risk distribution is calculated from classified emails.",
+            "Common threat types are counted from completed analyses.",
+            "High-risk emails are prioritised by risk score.",
+            "Similar emails are grouped using text similarity."
+        ]
+
+        for item in methodology:
+            document.add_paragraph(item, style="List Bullet")
+
+        document.add_heading("Limitations", level=2)
+
+        limitations = [
+            "AI-generated classifications may be inaccurate.",
+            "Similar emails do not necessarily originate from the same attacker.",
+            "Failed analyses are excluded from risk classifications.",
+            "Risk scores indicate potential threats but are not guarantees."
+        ]
+
+        for item in limitations:
+            document.add_paragraph(item, style="List Bullet")

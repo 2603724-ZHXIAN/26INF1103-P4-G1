@@ -150,6 +150,19 @@ class TestWordReportWriter(unittest.TestCase):
         self.assertIn("Do not click suspicious links.", text)
         self.assertIn("Change your password.", text)
 
+    def test_methodology_and_limitations(self):
+        document = self._generate_document()
+        text = self._document_text(document)
+
+        self.assertIn("Methodology and Limitations", text)
+        self.assertIn("Emails are analysed using AI", text)
+        self.assertIn("Similar emails are grouped", text)
+        self.assertIn("AI-generated classifications may be inaccurate.", text)
+        self.assertIn(
+            "Similar emails do not necessarily originate from the same attacker.",
+            text
+        )
+
     def test_empty_batch(self):
         empty_report = BatchReport({}, [])
         self.writer.export(empty_report, self.output_path)
