@@ -129,7 +129,11 @@ class WordReportWriter:
 
         document.add_heading("Potential Scam Campaigns", level=1)
 
-        campaign_groups = report.get_campaign_groups()
+        campaign_groups = [
+            group
+            for group in report.get_campaign_groups()
+            if group["count"] >= 2
+        ]
 
         if campaign_groups:
             for index, group in enumerate(campaign_groups, start=1):

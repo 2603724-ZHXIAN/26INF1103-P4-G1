@@ -133,6 +133,32 @@ class TestWordReportWriter(unittest.TestCase):
         self.assertIn("Number of Emails: 2", text)
         self.assertIn("Submission IDs: 101, 102", text)
 
+    def test_campaign_section_excludes_single_emails(self):
+        records = [
+            {
+                "submission_id": 201,
+                "processing_status": "completed",
+                "input_value": "Your bank account is suspended.",
+                "primary_threat_type": "phishing",
+            },
+            {
+                "submission_id": 202,
+                "processing_status": "completed",
+                "input_value": "Congratulations! You won a free holiday.",
+                "primary_threat_type": "prize scam",
+            },
+        ]
+
+        report = BatchReport({}, records)
+        self.writer.export(report, self.output_path)
+
+        document = Document(self.output_path)
+        text = self._document_text(document)
+
+        self.assertIn("Potential Scam Campaigns", text)
+        self.assertIn("No campaign groups available.", text)
+        self.assertNotIn("Campaign Group 1", text)
+
     def test_failed_email_details(self):
         document = self._generate_document()
         text = self._document_text(document)
