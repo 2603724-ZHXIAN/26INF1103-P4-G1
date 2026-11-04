@@ -1,11 +1,22 @@
 from collections import Counter
+from src.batch.campaign_detector import CampaignDetector
 
 class BatchReport:
     """Prepare statistics and rankings for an analysed email batch."""
 
-    def __init__(self, batch_info: dict, email_records: list[dict]) -> None:
+    def __init__(
+        self,
+        batch_info: dict,
+        email_records: list[dict],
+        campaign_detector: CampaignDetector | None = None
+    ) -> None:
         self._batch_info = batch_info.copy()
         self._email_records = [record.copy() for record in email_records]
+        self._campaign_detector = (
+            campaign_detector
+            if campaign_detector is not None
+            else CampaignDetector()
+        )
         
     @property
     def batch_info(self) -> dict:
@@ -111,3 +122,9 @@ class BatchReport:
         )
 
         return ranked_records
+
+    def get_campaign_groups(self) -> list[dict]:
+        """Return groups of emails with similar wording."""
+        return self._campaign_detector.group_similar_emails(
+            self._email_records
+        )
