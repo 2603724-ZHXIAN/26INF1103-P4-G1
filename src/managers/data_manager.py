@@ -1,5 +1,8 @@
 from datetime import datetime, timezone
-"""SQLite repository for the Phase 2 domain models.
+"""SQLite persistence for submissions, AI results and email batches.
+
+SRP: Handles storage and queries; terminal presentation, AI requests and
+risk classification remain in their respective managers.
 
 Database failures raise DataManagerError for the coordinator to handle.
 None from get_submission_by_id means not found, not database failure.
@@ -339,11 +342,23 @@ SCHEMA = """
 
 
 class DataManagerError(Exception):
-    """A persistence operation could not be completed."""
+    """Specialise Exception to identify persistence failures.
 
+    Callers can handle database failures separately from invalid input.
+    """
 
 class DataManager:
-    """Persist domain objects without exposing SQL to other layers."""
+    """Persist domain objects without exposing SQL to other layers.
+
+    Encapsulation: Protected attributes and helpers hide connection and
+    SQL details behind public save, load and query methods.
+
+    Association: Collaborates with Submission, AssessmentResult,
+    ThreatEvidence and IngestedEmail without owning their lifecycles.
+
+    SRP: Manages persistence without generating AI responses, calculating
+    risk scores or displaying terminal menus.
+    """
 
     def __init__(self, db_path: str = "data/database.db"):
         self._db_path = str(db_path)
@@ -354,6 +369,11 @@ class DataManager:
 
     @contextmanager
     def _get_connection(self):
+        """Manage a connection and transaction for one repository operation.
+
+        Commit on success, roll back on failure and close file connections.
+        Retain the owned in-memory connection until close() is called.
+        """
         connection = None
         try:
             if self._db_path != ":memory:":
@@ -385,6 +405,7 @@ class DataManager:
             self._memory_connection.close()
             self._memory_connection = None
 
+    # Shared validation keeps identifier checks consistent across operations.
     @staticmethod
     def _check_id(submission_id):
         if type(submission_id) is not int or submission_id <= 0:
@@ -648,7 +669,8 @@ class DataManager:
             if cursor.rowcount != 1:
                 raise ValueError("No batch exists with that reference.")
 
-
+    # Persist batch membership using the existing submission field.
+    # A database relationship does not itself establish OOP ownership.
     def link_submission_to_batch(
         self,
         batch_reference: str,
@@ -960,6 +982,55 @@ class DataManager:
             high_risk_only=True,
         )
 
+    # Shared retrieval avoids separate education-loading implementations
+    # for batch details and historical reports.
+    def _load_saved_education(self, submission_id: int) -> dict:
+        """Load education from the saved AI response without another API call."""
+        self._check_id(submission_id)
+
+        with self._get_connection() as connection:
+            row = connection.execute(
+                """
+                SELECT
+                    CASE
+                        WHEN s.input_type = 'text'
+                        THEN ta.raw_gemini_response
+                        ELSE tai.raw_ai_response
+                    END AS raw_response
+                FROM submission AS s
+                LEFT JOIN text_analysis AS ta
+                    ON ta.submission_id = s.submission_id
+                LEFT JOIN technical_ai_analysis AS tai
+                    ON tai.submission_id = s.submission_id
+                WHERE s.submission_id = ?
+                """,
+                (submission_id,),
+            ).fetchone()
+
+        if row is None or row["raw_response"] is None:
+            return {}
+
+        try:
+            ai_result = json.loads(row["raw_response"])
+        except (TypeError, ValueError) as error:
+            raise DataManagerError(
+                "The saved AI response contains invalid JSON."
+            ) from error
+
+        if not isinstance(ai_result, dict):
+            raise DataManagerError(
+                "The saved AI response must be a JSON object."
+            )
+
+        education = ai_result.get("education", {})
+
+        if not isinstance(education, dict):
+            raise DataManagerError(
+                "The saved education must be a JSON object."
+            )
+
+        return education
+    
     def get_batch_email_details(
         self,
         batch_reference: str,
@@ -993,39 +1064,15 @@ class DataManager:
                 "The saved email details are incomplete."
             )
 
-        with self._get_connection() as connection:
-            analysis = connection.execute(
-                """
-                SELECT raw_gemini_response
-                FROM text_analysis
-                WHERE submission_id = ?
-                """,
-                (submission_id,),
-            ).fetchone()
+        submission = self.get_submission_by_id(submission_id)
+        metadata = self.get_email_metadata(submission_id)
 
-        education = {}
+        if submission is None or metadata is None:
+            raise DataManagerError(
+                "The saved email details are incomplete."
+            )
 
-        if analysis is not None:
-            try:
-                ai_result = json.loads(
-                    analysis["raw_gemini_response"]
-                )
-            except (TypeError, ValueError) as error:
-                raise DataManagerError(
-                    "The saved email AI response contains invalid JSON."
-                ) from error
-
-            if not isinstance(ai_result, dict):
-                raise DataManagerError(
-                    "The saved email AI response must be an object."
-                )
-
-            education = ai_result.get("education", {})
-
-            if not isinstance(education, dict):
-                raise DataManagerError(
-                    "The saved email education must be an object."
-                )
+        education = self._load_saved_education(submission_id)
 
         return {
             "submission": submission,
@@ -1342,6 +1389,8 @@ class DataManager:
                     values + [sub_id],
                 )
 
+            # Save the submission's attached assessment and evidence using
+            # the same transaction as its parent record.
             assessment_id = None
 
             if submission.assessment is not None:
@@ -1358,6 +1407,7 @@ class DataManager:
                 submission.evidences,
             )
 
+        # Update domain objects only after the database transaction commits.
         submission.submission_id = sub_id
 
         if assessment_id is not None:
@@ -1479,7 +1529,10 @@ class DataManager:
             raise DataManagerError(f"Stored {field} is invalid.") from error
 
     def get_submission_by_id(self, submission_id: int):
-        """Return the composed domain object, or None when the ID is absent."""
+        """Reconstruct a submission with its saved assessment and evidence.
+
+        Return None when absent; raise DataManagerError for invalid storage.
+        """
         self._check_id(submission_id)
         with self._get_connection() as connection:
             row = connection.execute("SELECT * FROM submission WHERE submission_id = ?", (submission_id,)).fetchone()
@@ -1629,6 +1682,16 @@ class DataManager:
                     message_classification = excluded.message_classification,
                     primary_threat_type = excluded.primary_threat_type,
                     analysis_confidence = excluded.analysis_confidence,
+                    language = excluded.language,
+                    message_type = excluded.message_type,
+                    claimed_entity = excluded.claimed_entity,
+                    requested_actions = excluded.requested_actions,
+                    possible_intents = excluded.possible_intents,
+                    extracted_urls = excluded.extracted_urls,
+                    extracted_contacts = excluded.extracted_contacts,
+                    suspected_threat_types = excluded.suspected_threat_types,
+                    other_warning_signs = excluded.other_warning_signs,
+                    user_exposure = excluded.user_exposure,
                     model_name = excluded.model_name,
                     raw_gemini_response = excluded.raw_gemini_response""",
                 (
@@ -1670,10 +1733,13 @@ class DataManager:
                     raw_vt_response, created_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(submission_id) DO UPDATE SET
+                    resource_type = excluded.resource_type,
+                    resource_identifier = excluded.resource_identifier,
                     malicious_count = excluded.malicious_count,
                     suspicious_count = excluded.suspicious_count,
                     harmless_count = excluded.harmless_count,
                     undetected_count = excluded.undetected_count,
+                    timeout_count = excluded.timeout_count,
                     reputation = excluded.reputation,
                     raw_vt_response = excluded.raw_vt_response""",
                 (
@@ -1791,9 +1857,51 @@ class DataManager:
             "matched_rules", "matched_exposures",
         ]
         for field in json_fields:
-            if field in report and report[field]:
-                try:
-                    report[field] = json.loads(report[field])
-                except (json.JSONDecodeError, TypeError):
-                    pass
+            value = report.get(field)
+
+            if value is None:
+                continue
+
+            try:
+                decoded = json.loads(value)
+            except (ValueError, TypeError) as error:
+                raise DataManagerError(
+                    f"Stored report field '{field}' contains invalid JSON."
+                ) from error
+
+            expected_type = dict if field == "user_exposure" else list
+
+            if not isinstance(decoded, expected_type):
+                raise DataManagerError(
+                    f"Stored report field '{field}' has an invalid type."
+                )
+
+            report[field] = decoded
+
+        education = self._load_saved_education(submission_id)
+
+        education_fields = {
+            "threat_explanations": list,
+            "threat_summary": str,
+            "what_it_is": str,
+            "why_dangerous": list,
+            "preventive_steps": list,
+            "recovery_steps": list,
+            "limitations": list,
+            "recovery_by_action": dict,
+        }
+
+        for field, expected_type in education_fields.items():
+            if field not in education:
+                continue
+
+            value = education[field]
+
+            if not isinstance(value, expected_type):
+                raise DataManagerError(
+                    f"Saved education field '{field}' has an invalid type."
+                )
+
+            report[field] = value
+
         return report
