@@ -96,5 +96,79 @@ class TestBatchReport(unittest.TestCase):
         self.assertEqual(distribution["medium"], 0.0)
         self.assertEqual(distribution["low"], 0.0)
 
+    def test_get_common_threats(self):
+        email_records = [
+            {
+                "processing_status": "completed",
+                "primary_threat_type": "Phishing"
+            },
+            {
+                "processing_status": "completed",
+                "primary_threat_type": "Phishing"
+            },
+            {
+                "processing_status": "completed",
+                "primary_threat_type": "Malware"
+            }
+        ]
+
+        report = BatchReport({}, email_records)
+
+        expected = [
+            {"threat_type": "Phishing", "count": 2},
+            {"threat_type": "Malware", "count": 1}
+        ]
+
+        self.assertEqual(report.get_common_threats(), expected)
+
+    def test_get_common_threats_ignores_failed(self):
+        email_records = [
+            {
+                "processing_status": "completed",
+                "primary_threat_type": "Phishing"
+            },
+            {
+                "processing_status": "failed",
+                "primary_threat_type": "Malware"
+            }
+        ]
+
+        report = BatchReport({}, email_records)
+
+        self.assertEqual(
+            report.get_common_threats(),
+            [{"threat_type": "Phishing", "count": 1}]
+        )
+
+
+    def test_get_common_threats_ignores_missing_types(self):
+        email_records = [
+            {
+                "processing_status": "completed",
+                "primary_threat_type": None
+            },
+            {
+                "processing_status": "completed",
+                "primary_threat_type": "   "
+            },
+            {
+                "processing_status": "completed",
+                "primary_threat_type": "Phishing"
+            }
+        ]
+
+        report = BatchReport({}, email_records)
+
+        self.assertEqual(
+            report.get_common_threats(),
+            [{"threat_type": "Phishing", "count": 1}]
+        )
+
+
+    def test_get_common_threats_empty_batch(self):
+        report = BatchReport({}, [])
+
+        self.assertEqual(report.get_common_threats(), [])
+
 if __name__ == "__main__":
     unittest.main()
