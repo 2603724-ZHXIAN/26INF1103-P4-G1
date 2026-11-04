@@ -34,30 +34,7 @@ class WordReportWriter:
         self._add_campaign_section(document, report)
 
         # Failed Email Details
-        document.add_heading("Failed Email Analyses", level=1)
-
-        failed_records = [
-            record
-            for record in report.email_records
-            if record.get("processing_status") == "failed"
-        ]
-
-        if failed_records:
-            failed_table = document.add_table(rows=1, cols=2)
-            failed_table.style = "Table Grid"
-
-            header = failed_table.rows[0].cells
-            header[0].text = "Submission ID"
-            header[1].text = "Error Message"
-
-            for record in failed_records:
-                cells = failed_table.add_row().cells
-                cells[0].text = str(record.get("submission_id") or "Unknown")
-                cells[1].text = str(
-                    record.get("error_message") or "No error details available"
-                )
-        else:
-            document.add_paragraph("No failed email analyses.")
+        self._add_failed_section(document, report)
 
         # AI Educational Guidance
         document.add_heading("AI Educational Guidance", level=1)
@@ -242,3 +219,33 @@ class WordReportWriter:
                 cells[2].text = str(result["risk_score"])
         else:
             document.add_paragraph("No ranked email results available.")
+
+    def _add_failed_section(
+        self, document, report: BatchReport
+    ) -> None:
+        """Add failed email analyses to the Word document."""
+
+        document.add_heading("Failed Email Analyses", level=1)
+
+        failed_records = [
+            record
+            for record in report.email_records
+            if record.get("processing_status") == "failed"
+        ]
+
+        if failed_records:
+            failed_table = document.add_table(rows=1, cols=2)
+            failed_table.style = "Table Grid"
+
+            header = failed_table.rows[0].cells
+            header[0].text = "Submission ID"
+            header[1].text = "Error Message"
+
+            for record in failed_records:
+                cells = failed_table.add_row().cells
+                cells[0].text = str(record.get("submission_id") or "Unknown")
+                cells[1].text = str(
+                    record.get("error_message") or "No error details available"
+                )
+        else:
+            document.add_paragraph("No failed email analyses.")
