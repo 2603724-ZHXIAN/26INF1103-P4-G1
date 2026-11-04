@@ -112,3 +112,68 @@ class TestCampaignDetector(unittest.TestCase):
         self.detector.group_similar_emails(emails)
 
         self.assertEqual(emails, original)
+
+    def test_identify_common_patterns(self):
+        group = {
+            "count": 3,
+            "email_records": [
+                {"primary_threat_type": "Phishing"},
+                {"primary_threat_type": "phishing"},
+                {"primary_threat_type": "Credential Theft"}
+            ]
+        }
+
+        result = self.detector.identify_common_patterns(group)
+
+        self.assertEqual(result["email_count"], 3)
+        self.assertEqual(result["common_threat_types"], [
+            {"threat_type": "phishing", "count": 2},
+            {"threat_type": "credential theft", "count": 1}
+        ])
+
+
+    def test_identify_common_patterns_empty_group(self):
+        group = {
+            "count": 0,
+            "email_records": []
+        }
+
+        result = self.detector.identify_common_patterns(group)
+
+        self.assertEqual(result["email_count"], 0)
+        self.assertEqual(result["common_threat_types"], [])
+
+
+    def test_identify_common_patterns_missing_types(self):
+        group = {
+            "count": 3,
+            "email_records": [
+                {"primary_threat_type": None},
+                {"primary_threat_type": ""},
+                {}
+            ]
+        }
+
+        result = self.detector.identify_common_patterns(group)
+
+        self.assertEqual(result["common_threat_types"], [])
+
+
+    def test_identify_common_patterns_does_not_modify_group(self):
+        group = {
+            "count": 1,
+            "email_records": [
+                {"primary_threat_type": "Phishing"}
+            ]
+        }
+
+        original = {
+            "count": 1,
+            "email_records": [
+                {"primary_threat_type": "Phishing"}
+            ]
+        }
+
+        self.detector.identify_common_patterns(group)
+
+        self.assertEqual(group, original)
