@@ -13,6 +13,8 @@ import locale
 import os
 import sys
 from typing import Any, Dict, List, Optional, Tuple, Union
+from datetime import datetime, timedelta, timezone
+from pathlib import PureWindowsPath
 
 # Handle platform-specific console encoding for Unicode emojis
 if hasattr(sys.stdout, "reconfigure"):
@@ -28,10 +30,6 @@ if hasattr(sys.stderr, "reconfigure"):
 
 import validators
 
-try:
-    from pick import pick
-except ImportError:
-    pick = None
 
 from ..config import DB_PATH
 from ..models.assessment import AssessmentResult
@@ -234,10 +232,12 @@ class IOManager:
             f"  {yellow}[1]{reset} 📧 Analyze Suspicious Text / Scam Email Message",
             f"  {yellow}[2]{reset} 🔗 Analyze Suspicious URL",
             f"  {yellow}[3]{reset} 📎 Analyze File (Path)",
-            f"  {yellow}[4]{reset} 🗄️  Query Historical Incident Database",
-            f"  {yellow}[5]{reset} 📈 Top Trending Attacks / Scams",
-            f"  {yellow}[6]{reset} 🌐 Emerging Threat & Scam Radar (Live Web Grounding)",
-            f"  {yellow}[7]{reset} 🚪 Exit",
+            f"  {yellow}[4]{reset} 📨 Batch Input Analysis",
+            f"  {yellow}[5]{reset} 🗂️ Previous Batch Records",
+            f"  {yellow}[6]{reset} 🗄️  Query Historical Incident Database",
+            f"  {yellow}[7]{reset} 📈 Top Trending Attacks / Scams",
+            f"  {yellow}[8]{reset} 🌐 Emerging Threat & Scam Radar (Live Web Grounding)",
+            f"  {yellow}[9]{reset} 🚪 Exit",
             f"{dim}{'-' * width}{reset}",
         ]
         return "\n".join(lines)
@@ -292,46 +292,339 @@ class IOManager:
         return self.collect_interaction_details()
 
     def collect_user_request(self) -> dict:
-        """Display main menu options (1-7) and return validated request dict."""
+        """Display main menu options 1-9 and return a validated request."""
         red = self._c("red")
         reset = self._c("reset")
 
         while True:
             self._print(self._render_menu())
-            choice = input("Select an option (1-7): > ").strip()
+            choice = input("Select an option (1-9): > ").strip()
 
-            while choice not in {"1", "2", "3", "4", "5", "6", "7"}:
-                self._print(f"  {red}❌ Invalid choice. Please enter a number between 1 and 7.{reset}")
-                choice = input("Select an option (1-7): > ").strip()
+            while choice not in {
+                "1", "2", "3", "4", "5", "6", "7", "8", "9"
+            }:
+                self._print(
+                    f"  {red}Invalid choice. "
+                    f"Please enter a number between 1 and 9.{reset}"
+                )
+                choice = input("Select an option (1-9): > ").strip()
 
-            self._print(f"{self._tag()} 🛠️  Option [{choice}] has been selected.")
+            self._print(
+                f"{self._tag()} Option [{choice}] has been selected."
+            )
 
             if choice == "1":
-                req = self._collect_text_request()
-                if req is not None:
-                    return req
+                request = self._collect_text_request()
+                if request is not None:
+                    return request
+
             elif choice == "2":
                 return self._collect_url_request()
+
             elif choice == "3":
-                req = self._collect_file_request()
-                if req is not None:
-                    return req
+                request = self._collect_file_request()
+                if request is not None:
+                    return request
+
             elif choice == "4":
-                res = self._handle_history_query()
-                if res is not None:
-                    return res
+                request = self.collect_batch_input_request()
+                if request is not None:
+                    return request
+
             elif choice == "5":
-                res = self._handle_trending_threats()
-                if res is not None:
-                    return res
+                return {"action": "previous_email_batches"}
+
             elif choice == "6":
-                return self._collect_radar_request()
+                request = self._handle_history_query()
+                if request is not None:
+                    return request
+
             elif choice == "7":
-                confirm = input("Are you sure you want to exit? (y/n): > ").strip().lower()
+                request = self._handle_trending_threats()
+                if request is not None:
+                    return request
+
+            elif choice == "8":
+                return self._collect_radar_request()
+
+            elif choice == "9":
+                confirm = input(
+                    "Are you sure you want to exit? (y/n): > "
+                ).strip().lower()
+
                 if confirm in ("y", "yes"):
                     return {"action": "exit"}
 
             self._print()
+
+    @staticmethod
+    def _batch_display_reference(batch: dict) -> str:
+        """Use the persistent database ID as the visible batch number."""
+        return f"BATCH-{batch['batch_id']:04d}"
+
+    @staticmethod
+    def _batch_display_timestamp(value: str) -> str:
+        """Format an aware stored timestamp in Singapore time."""
+        try:
+            timestamp = datetime.fromisoformat(
+                value.replace("Z", "+00:00")
+            )
+
+            if timestamp.tzinfo is None:
+                return "Unavailable: timestamp has no timezone"
+
+            singapore_time = timestamp.astimezone(
+                timezone(timedelta(hours=8))
+            )
+
+            return singapore_time.strftime(
+                "%d %b %Y, %I:%M %p"
+            ) + " SGT"
+
+        except (TypeError, ValueError, AttributeError):
+            return "Unavailable"
+
+    def _display_batch_table(
+        self,
+        headings: list[str],
+        rows: list[list],
+        widths: list[int],
+    ) -> None:
+        """Display aligned columns and shorten long cells."""
+        separator = "-+-".join("-" * width for width in widths)
+
+        for index, row in enumerate([headings] + rows):
+            cells = []
+
+            for value, width in zip(row, widths):
+                text = " ".join(str(value).split())
+
+                if len(text) > width:
+                    text = text[:width - 3] + "..."
+
+                cells.append(text.ljust(width))
+
+            self._print(" | ".join(cells))
+
+            if index == 0:
+                self._print(separator)
+
+    def display_email_batch_summary(
+        self,
+        batch: dict,
+        emails: Optional[list[dict]] = None,
+    ) -> None:
+        """Display saved batch totals and email results."""
+        self._print()
+        self._print("=" * 96)
+        self._print("BATCH SUMMARY".center(96))
+        self._print("=" * 96)
+
+        status = batch["processing_status"].replace("_", " ").title()
+
+        self._display_batch_table(
+            ["Batch Reference", "Created (Singapore)", "Status"],
+            [[
+                self._batch_display_reference(batch),
+                self._batch_display_timestamp(batch["created_at"]),
+                status,
+            ]],
+            [16, 30, 20],
+        )
+
+        self._print()
+        self._print("IMPORT SUMMARY")
+
+        self._display_batch_table(
+            ["Total Files", "Accepted Emails", "Duplicates", "Failed Imports"],
+            [[
+                batch["total_files"],
+                batch["accepted_count"],
+                batch["duplicate_count"],
+                batch["import_failed_count"],
+            ]],
+            [12, 16, 12, 15],
+        )
+
+        self._print()
+        self._print("ANALYSIS SUMMARY")
+
+        self._display_batch_table(
+            [
+                "Total Emails",
+                "Analysed",
+                "Failed",
+                "Unfinished",
+                "High",
+                "Medium",
+                "Low",
+            ],
+            [[
+                batch["accepted_count"],
+                batch["completed_count"],
+                batch["analysis_failed_count"],
+                (
+                    batch["accepted_count"]
+                    - batch["completed_count"]
+                    - batch["analysis_failed_count"]
+                ),
+                batch["high_risk_count"],
+                batch["medium_risk_count"],
+                batch["low_risk_count"],
+            ]],
+            [12, 10, 8, 12, 6, 8, 6],
+        )
+
+        if emails is not None:
+            self._print()
+            self._print("EMAIL RESULTS")
+            self.display_batch_email_rows(emails)
+
+        self._print()
+        self._print("Total Emails = accepted emails.")
+        self._print("Failed = analysis failures; import failures are separate.")
+        self._print("Unfinished = accepted emails not completed or failed.")
+
+    def display_batch_email_rows(self, emails: list[dict]) -> None:
+        """Display saved email metadata and classification."""
+        if not emails:
+            self._print("No matching emails are available.")
+            return
+
+        rows = []
+
+        for email in emails:
+            status = email["processing_status"]
+
+            if status == "completed":
+                risk = (email.get("overall_risk") or "unknown").upper()
+            else:
+                risk = "UNASSESSED"
+
+            filename = PureWindowsPath(
+                email.get("source_path") or ""
+            ).name
+
+            rows.append([
+                email.get("item_id") or "Unavailable",
+                filename or "Unavailable",
+                risk,
+                status.replace("_", " ").title(),
+                email.get("subject") or "(No subject)",
+            ])
+
+        self._display_batch_table(
+            ["Email Reference", "Filename", "Risk", "Status", "Subject"],
+            rows,
+            [15, 20, 10, 12, 26],
+        )
+
+    def select_previous_email_batch(
+        self,
+        batches: list[dict],
+    ) -> Optional[str]:
+        """Select a batch using its persistent number or display reference."""
+        if not batches:
+            self._print("No previous email batches are available.")
+            return None
+
+        self._print()
+        self._print("=" * 100)
+        self._print("PREVIOUS BATCH RECORDS".center(100))
+        self._print("=" * 100)
+
+        rows = []
+
+        for batch in batches:
+            rows.append([
+                self._batch_display_reference(batch),
+                self._batch_display_timestamp(batch["created_at"]),
+                batch["accepted_count"],
+                batch["high_risk_count"],
+                batch["medium_risk_count"],
+                batch["low_risk_count"],
+                batch["analysis_failed_count"],
+            ])
+
+        self._display_batch_table(
+            [
+                "Batch",
+                "Created (Singapore)",
+                "Emails",
+                "High",
+                "Medium",
+                "Low",
+                "Failed",
+            ],
+            rows,
+            [14, 30, 7, 6, 8, 6, 7],
+        )
+
+        self._print()
+        self._print("Emails = accepted emails; Failed = analysis failures.")
+        self._print("Enter a batch number or reference, such as 1 or BATCH-0001.")
+        self._print("Enter 0 to return to the main menu.")
+
+        while True:
+            choice = input("Select batch: > ").strip().upper()
+
+            if choice == "0":
+                return None
+
+            for batch in batches:
+                reference = self._batch_display_reference(batch)
+
+                if choice == reference:
+                    return batch["batch_reference"]
+
+                if choice.isdecimal():
+                    if int(choice) == batch["batch_id"]:
+                        return batch["batch_reference"]
+
+            self._print("That batch is unavailable.")
+
+    def collect_batch_review_request(self) -> dict:
+        """Collect an action for the currently selected batch."""
+        while True:
+            self._print()
+            self._print("BATCH OPTIONS")
+            self._print("1. View All Emails")
+            self._print("2. Search Emails")
+            self._print("3. View High Risk Emails")
+            self._print("4. Download Batch Report (.docx)")
+            self._print("0. Back")
+
+            choice = input("Select an option: > ").strip()
+
+            if choice in {"0", "1", "3", "4"}:
+                return {"choice": choice}
+
+            if choice == "2":
+                mode = input(
+                    "Search by 1. Email reference or 2. Keyword "
+                    "(0 to cancel): > "
+                ).strip()
+
+                if mode == "0":
+                    continue
+
+                if mode not in {"1", "2"}:
+                    self._print("Select 1 or 2.")
+                    continue
+
+                query = input("Enter search value: > ").strip()
+
+                if not query:
+                    self._print("Search value cannot be empty.")
+                    continue
+
+                return {
+                    "choice": "2",
+                    "mode": mode,
+                    "query": query,
+                }
+
+            self._print("Enter an option from 0 to 4.")
 
     def collect_batch_input_request(self) -> Optional[dict]:
         """Collect email paths without parsing or analysing files."""
