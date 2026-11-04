@@ -192,5 +192,109 @@ class TestBatchReport(unittest.TestCase):
             report.get_common_threats(),
             [{"threat_type": "phishing", "count": 3}]
         )
+
+    def test_get_ranked_results(self):
+        email_records = [
+            {
+                "submission_id": 101,
+                "processing_status": "completed",
+                "overall_risk": "low",
+                "risk_score": 15
+            },
+            {
+                "submission_id": 102,
+                "processing_status": "completed",
+                "overall_risk": "high",
+                "risk_score": 90
+            },
+            {
+                "submission_id": 103,
+                "processing_status": "completed",
+                "overall_risk": "medium",
+                "risk_score": 55
+            }
+        ]
+
+        report = BatchReport({}, email_records)
+
+        ranked = report.get_ranked_results()
+
+        self.assertEqual(
+            [record["submission_id"] for record in ranked],
+            [102, 103, 101]
+        )
+
+    def test_get_ranked_results_ignores_failed(self):
+        email_records = [
+            {
+                "submission_id": 101,
+                "processing_status": "completed",
+                "overall_risk": "medium",
+                "risk_score": 55
+            },
+            {
+                "submission_id": 102,
+                "processing_status": "failed",
+                "overall_risk": "high",
+                "risk_score": 95
+            }
+        ]
+
+        report = BatchReport({}, email_records)
+
+        ranked = report.get_ranked_results()
+
+        self.assertEqual(len(ranked), 1)
+        self.assertEqual(ranked[0]["submission_id"], 101)
+
+    def test_get_ranked_results_ignores_invalid_scores(self):
+        email_records = [
+            {"submission_id": 1, "processing_status": "completed", "risk_score": None},
+            {"submission_id": 2, "processing_status": "completed", "risk_score": "90"},
+            {"submission_id": 3, "processing_status": "completed", "risk_score": True},
+            {"submission_id": 4, "processing_status": "completed", "risk_score": -5},
+            {"submission_id": 5, "processing_status": "completed", "risk_score": 120},
+            {"submission_id": 6, "processing_status": "completed", "risk_score": float("nan")},
+            {"submission_id": 7, "processing_status": "completed", "risk_score": 80},
+        ]
+
+        report = BatchReport({}, email_records)
+
+        ranked = report.get_ranked_results()
+
+        self.assertEqual(len(ranked), 1)
+        self.assertEqual(ranked[0]["submission_id"], 7)
+        self.assertEqual(ranked[0]["risk_score"], 80)
+
+    def test_get_ranked_results_empty_batch(self):
+        report = BatchReport({}, [])
+
+        self.assertEqual(report.get_ranked_results(), [])
+
+
+    def test_get_ranked_results_does_not_modify_original(self):
+        email_records = [
+            {
+                "submission_id": 1,
+                "processing_status": "completed",
+                "overall_risk": "low",
+                "risk_score": 10
+            },
+            {
+                "submission_id": 2,
+                "processing_status": "completed",
+                "overall_risk": "high",
+                "risk_score": 90
+            }
+        ]
+
+        report = BatchReport({}, email_records)
+
+        report.get_ranked_results()
+
+        self.assertEqual(
+            [record["submission_id"] for record in report.email_records],
+            [1, 2]
+        )
 if __name__ == "__main__":
     unittest.main()
