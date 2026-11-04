@@ -66,7 +66,7 @@ class BatchReport:
             if not isinstance(threat_type, str):
                 continue
 
-            threat_type = threat_type.strip()
+            threat_type = threat_type.strip().casefold()
 
             if not threat_type:
                 continue
