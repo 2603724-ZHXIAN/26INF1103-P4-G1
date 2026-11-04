@@ -28,26 +28,7 @@ class WordReportWriter:
         self._add_threat_section(document, report)
 
         # Ranked Email Results
-        document.add_heading("Ranked Email Results", level=1)
-
-        ranked_results = report.get_ranked_results()
-
-        if ranked_results:
-            ranked_table = document.add_table(rows=1, cols=3)
-            ranked_table.style = "Table Grid"
-
-            header = ranked_table.rows[0].cells
-            header[0].text = "Submission ID"
-            header[1].text = "Risk Level"
-            header[2].text = "Risk Score"
-
-            for result in ranked_results:
-                cells = ranked_table.add_row().cells
-                cells[0].text = str(result["submission_id"])
-                cells[1].text = str(result["overall_risk"]).title()
-                cells[2].text = str(result["risk_score"])
-        else:
-            document.add_paragraph("No ranked email results available.")
+        self._add_ranked_section(document, report)
 
         # Campaign Grouping
         self._add_campaign_section(document, report)
@@ -235,3 +216,29 @@ class WordReportWriter:
                     document.add_paragraph("No common threat types identified.")
         else:
             document.add_paragraph("No campaign groups available.")
+
+    def _add_ranked_section(
+        self, document, report: BatchReport
+    ) -> None:
+        """Add ranked email results to the Word document."""
+
+        document.add_heading("Ranked Email Results", level=1)
+
+        ranked_results = report.get_ranked_results()
+
+        if ranked_results:
+            ranked_table = document.add_table(rows=1, cols=3)
+            ranked_table.style = "Table Grid"
+
+            header = ranked_table.rows[0].cells
+            header[0].text = "Submission ID"
+            header[1].text = "Risk Level"
+            header[2].text = "Risk Score"
+
+            for result in ranked_results:
+                cells = ranked_table.add_row().cells
+                cells[0].text = str(result["submission_id"])
+                cells[1].text = str(result["overall_risk"]).title()
+                cells[2].text = str(result["risk_score"])
+        else:
+            document.add_paragraph("No ranked email results available.")
