@@ -2,8 +2,8 @@
 
 Strict Separation of Concerns:
 - Aggregates BaseLLMClient via dependency injection (_llm_client).
-- Uses prompt delimiter sandboxing to distinguish untrusted submitted content
-  from analysis instructions and reduce prompt injection risks.
+- Uses delimiters to distinguish untrusted content from instructions;
+  delimiters do not guarantee protection against prompt injection.
 - Implements semantic message analysis and contextual threat education.
 - Builds structured JSON response schemas for message analysis, technical
   threat analysis and educational guidance.
@@ -37,6 +37,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 from dotenv import load_dotenv
 from jsonschema import SchemaError, ValidationError, validate
 
+# Shared abstract contract for interchangeable LLM provider clients.
 from ..interfaces.llm_client import BaseLLMClient
 from ..services.gemini_client import GeminiClient
 from ..services.groq_client import GroqClient
@@ -54,14 +55,11 @@ DELIMITER_TELEMETRY_END = "<<<END_TECHNICAL_TELEMETRY>>>"
 class AIManager:
     """Orchestrate semantic processing, schemas and provider failover.
 
-    Encapsulation:
-        Client references are protected and have validated setters.
+    Encapsulation: Client references are protected and have validated setters.
 
-    Aggregation:
-        Injected clients can exist independently of this manager.
+    Aggregation: Injected clients can exist independently of this manager.
 
-    Polymorphism:
-        Provider calls use the shared BaseLLMClient contract.
+    Polymorphism: Provider calls use the shared BaseLLMClient contract.
 
     Single Responsibility:
         This manager handles AI orchestration. It does not manage terminal
@@ -86,6 +84,8 @@ class AIManager:
         self._llm_client: BaseLLMClient
         self._fallback_client: Optional[BaseLLMClient] = None
 
+        # Aggregation: an injected client exists independently and may be
+        # shared; this manager does not control its lifecycle.
         if llm_client is not None:
             self.set_llm_client(llm_client)
         else:
@@ -751,7 +751,10 @@ class AIManager:
         if not scenario_required:
             return
 
+        # Validate structure before accessing nested recovery fields.
         validate(instance=result, schema=schema)
+
+        # Semantic validation also rejects empty or whitespace-only steps.
         cls._validate_recovery_scenarios(result)
 
     # -------------------------------------------------------------------------
@@ -769,6 +772,9 @@ class AIManager:
         primary_failed = False
         error_detail = ""
 
+        # Polymorphism: the concrete client supplies provider-specific behaviour.
+        # OCP: this execution path accepts another compatible client without
+        # adding provider-specific branches here.
         try:
             primary_result = (
                 self._llm_client.generate_structured_analysis(
@@ -974,6 +980,8 @@ class AIManager:
             **schema_arguments
         )
 
+        # Single-message and batch callers share this AI processing path.
+        # LogicManager applies the final classification rules to the result.
         return self._call_with_failover(prompt, schema)
 
     def analyze_technical_threat(
