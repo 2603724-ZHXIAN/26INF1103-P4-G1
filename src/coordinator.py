@@ -106,6 +106,12 @@ class EngineCoordinator:
                     # url or file → VirusTotal pipeline
                     self._handle_resource_pipeline(request)
 
+            elif action == "batch_email_analysis":
+                self._handle_batch_menu_request(request)
+
+            elif action == "previous_email_batches":
+                self._handle_previous_batch_request()
+
             elif action == "emerging_threat_radar":
                 self._handle_threat_radar(request)
 
@@ -315,6 +321,123 @@ class EngineCoordinator:
                 "database_error": database_error,
             }
 
+    def _review_email_batch(self, batch: dict) -> None:
+        """Use the same saved review screen for new and previous batches."""
+        reference = batch["batch_reference"]
+
+        emails = self._data.search_batch_emails(reference)
+
+        self._io.display_email_batch_summary(batch, emails)
+
+        while True:
+            request = self._io.collect_batch_review_request()
+            choice = request["choice"]
+
+            if choice == "0":
+                return
+
+            try:
+                if choice == "1":
+                    matches = self._data.search_batch_emails(reference)
+
+                elif choice == "2":
+                    if request["mode"] == "1":
+                        all_emails = self._data.search_batch_emails(
+                            reference
+                        )
+
+                        matches = []
+
+                        for email in all_emails:
+                            item_id = email.get("item_id") or ""
+
+                            if item_id.upper() == request["query"].upper():
+                                matches.append(email)
+
+                    else:
+                        matches = self._data.search_batch_emails(
+                            reference,
+                            keyword=request["query"],
+                        )
+
+                elif choice == "3":
+                    matches = self._data.get_batch_high_risk_emails(
+                        reference
+                    )
+
+                elif choice == "4":
+                    self._io._print(
+                        "Word report download is not connected yet."
+                    )
+                    continue
+
+                self._io.display_batch_email_rows(matches)
+
+            except (DataManagerError, ValueError) as error:
+                LOGGER.exception("Could not load batch emails.")
+                self._io._print(
+                    f"Could not load batch emails: {error}"
+                )
+
+    def _handle_batch_menu_request(self, request: dict) -> None:
+        """Process a batch and display its saved summary."""
+        try:
+            self._io._print(
+                "Importing and analysing emails. Please wait..."
+            )
+
+            result = self._handle_batch_pipeline(request)
+
+            if not result["status_saved"]:
+                self._io._print(
+                    "The final batch status could not be saved."
+                )
+                self._io._print(
+                    f"Reason: {result['status_error']}"
+                )
+
+            batches = self._data.list_email_batches()
+
+            for batch in batches:
+                if batch["batch_reference"] == result["batch_reference"]:
+                    self._review_email_batch(batch)
+                    break
+            else:
+                self._io._print(
+                    "The saved batch summary could not be retrieved."
+                )
+
+            if result["unprocessed_count"]:
+                self._io._print(
+                    f"Emails not processed: "
+                    f"{result['unprocessed_count']}"
+                )
+
+        except (DataManagerError, ValueError, RuntimeError) as error:
+            LOGGER.exception("Batch processing failed.")
+            self._io._print(f"Batch processing failed: {error}")
+
+    def _handle_previous_batch_request(self) -> None:
+        """Load previous batches and display the selected summary."""
+        try:
+            batches = self._data.list_email_batches()
+            reference = self._io.select_previous_email_batch(batches)
+
+            if reference is None:
+                return
+
+            for batch in batches:
+                if batch["batch_reference"] == reference:
+                    self._review_email_batch(batch)
+                    return
+
+            self._io._print("The selected batch is unavailable.")
+
+        except (DataManagerError, ValueError) as error:
+            LOGGER.exception("Loading previous batches failed.")
+            self._io._print(
+                f"Could not load previous batches: {error}"
+            )
     # -------------------------------------------------------------------------
     # Pipeline: URL / File Resource Analysis (VirusTotal)
     # -------------------------------------------------------------------------
