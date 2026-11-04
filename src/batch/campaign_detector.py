@@ -27,3 +27,46 @@ class CampaignDetector:
             return 0.0
 
         return SequenceMatcher(None, text_a, text_b).ratio()
+
+
+    def group_similar_emails(self, email_records: list[dict]) -> list[dict]:
+        """Group completed emails with similar wording."""
+
+        groups = []
+
+        for record in email_records:
+            if record.get("processing_status") != "completed":
+                continue
+
+            email_text = record.get("input_value")
+
+            if not isinstance(email_text, str) or not email_text.strip():
+                continue
+
+            matched_group = None
+
+            for group in groups:
+                representative = group["representative_text"]
+
+                similarity = self.calculate_similarity(
+                    email_text,
+                    representative
+                )
+
+                if similarity >= self._similarity_threshold:
+                    matched_group = group
+                    break
+
+            if matched_group is None:
+                groups.append({
+                    "representative_text": email_text,
+                    "submission_ids": [record.get("submission_id")],
+                    "count": 1
+                })
+            else:
+                matched_group["submission_ids"].append(
+                    record.get("submission_id")
+                )
+                matched_group["count"] += 1
+
+        return groups
