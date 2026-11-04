@@ -1,7 +1,7 @@
 """Presentation layer: Terminal UI and user interaction manager.
 
 Strict Separation of Concerns:
-- Handles CLI formatting, banners, prompts, curses/pick table navigation, and input validation.
+- Handles CLI formatting, prompts, curses navigation, numbered fallback menus and input validation.
 - Encapsulates terminal styling properties (_use_color, _banner_width, _theme_colors).
 - Does NOT calculate threat scores (delegates to LogicManager and AI layers).
 - Does NOT execute raw SQL queries directly (delegates historical & trending queries to DataManager).
@@ -106,6 +106,9 @@ class IOManager:
         if theme_colors is not None:
             self.theme_colors = theme_colors
 
+        # Dependency injection allows the application to supply its shared
+        # DataManager, or tests to supply a substitute.
+        # IOManager retains a collaborator reference without owning it.
         self._data_manager: Any = data_manager if data_manager is not None else default_db
         self._db_path: str = str(db_path or DB_PATH)
 
@@ -113,6 +116,8 @@ class IOManager:
     # Properties & Encapsulation
     # -------------------------------------------------------------------------
 
+    # Public properties expose supported settings while underscore attributes
+    # and helpers remain implementation details by Python convention.
     @property
     def use_color(self) -> bool:
         """Return whether ANSI color formatting is enabled."""
@@ -235,7 +240,7 @@ class IOManager:
             f"  {yellow}[2]{reset} 🔗 Analyze Suspicious URL",
             f"  {yellow}[3]{reset} 📎 Analyze File (Path)",
             f"  {yellow}[4]{reset} 📨 Batch Input Analysis",
-            f"  {yellow}[5]{reset} 🗂️ Previous Batch Records",
+            f"  {yellow}[5]{reset} 🗂️  Previous Batch Records",
             f"  {yellow}[6]{reset} 🗄️  Query Historical Incident Database",
             f"  {yellow}[7]{reset} 📈 Top Trending Attacks / Scams",
             f"  {yellow}[8]{reset} 🌐 Emerging Threat & Scam Radar (Live Web Grounding)",
@@ -501,6 +506,8 @@ class IOManager:
             if status == "completed":
                 risk = (email.get("overall_risk") or "unknown").upper()
             else:
+                # Read the saved domain result for presentation; ownership and
+                # classification remain outside this UI.
                 risk = "UNASSESSED"
 
             filename = PureWindowsPath(
@@ -1006,6 +1013,8 @@ class IOManager:
             if choice == "0":
                 return
 
+            # Select existing AI guidance for a hypothetical situation.
+            # Browsing does not make another AI call or record an action.
             action_key, action_label = actions[int(choice) - 1]
             scenarios = education.get("recovery_by_action", {})
             steps = None
@@ -1273,7 +1282,7 @@ class IOManager:
 
         self._print("\n🗄️  -- Query Historical Incident Database --")
         self._print("  [1] Search by keyword")
-        self._print("  [2] Filter by risk level (Low / Moderate / High)")
+        self._print("  [2] Filter by risk level (Low / Medium / High)")
         self._print("  [3] Back to main menu")
 
         while True:
@@ -1301,8 +1310,8 @@ class IOManager:
                 self._print(f"  {yellow}⚠️  No records found for '{keyword}'.{reset}")
 
         elif sub_choice == "2":
-            levels = {"1": "low", "2": "moderate", "3": "high"}
-            self._print("  [1] Low  [2] Moderate  [3] High")
+            levels = {"1": "low", "2": "medium", "3": "high"}
+            self._print("  [1] Low  [2] Medium  [3] High")
 
             while True:
                 lvl_choice = input("Select risk level (1-3): > ").strip()
@@ -1315,10 +1324,9 @@ class IOManager:
 
             if self._data_manager is not None:
                 if hasattr(self._data_manager, "get_records_by_risk_level"):
-                    try:
-                        results = self._data_manager.get_records_by_risk_level(self._db_path, selected_level)
-                    except TypeError:
-                        results = self._data_manager.get_records_by_risk_level(selected_level)
+                    results = self._data_manager.get_records_by_risk_level(
+                        selected_level,
+                    )
                 elif hasattr(self._data_manager, "query_by_risk"):
                     results = self._data_manager.query_by_risk(selected_level)
                 elif hasattr(self._data_manager, "search_records"):
@@ -1684,7 +1692,8 @@ class IOManager:
         if not records:
             return None
 
-        # Check whether interactive curses terminal is supported
+        # Prefer interactive navigation when supported; otherwise use
+        # numbered input so the same records remain accessible.
         if sys.stdin.isatty() and sys.stdout.isatty():
             try:
                 return self._browse_curses(records, title="HISTORICAL INCIDENT RESULTS")
