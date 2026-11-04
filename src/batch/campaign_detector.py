@@ -1,4 +1,5 @@
 from difflib import SequenceMatcher
+from collections import Counter
 
 
 class CampaignDetector:
@@ -61,12 +62,42 @@ class CampaignDetector:
                 groups.append({
                     "representative_text": email_text,
                     "submission_ids": [record.get("submission_id")],
-                    "count": 1
+                    "count": 1,
+                    "email_records": [record.copy()]
                 })
             else:
                 matched_group["submission_ids"].append(
                     record.get("submission_id")
                 )
                 matched_group["count"] += 1
+                matched_group["email_records"].append(record.copy())
 
         return groups
+
+    def identify_common_patterns(self, group: dict) -> dict:
+        """Identify threat types shared by emails in a group."""
+
+        records = group.get("email_records", [])
+
+        threat_types = []
+
+        for record in records:
+            threat_type = record.get("primary_threat_type")
+
+            if not isinstance(threat_type, str):
+                continue
+
+            threat_type = threat_type.strip().casefold()
+
+            if threat_type:
+                threat_types.append(threat_type)
+
+        counts = Counter(threat_types)
+
+        return {
+            "email_count": group.get("count", 0),
+            "common_threat_types": [
+                {"threat_type": threat, "count": count}
+                for threat, count in counts.most_common()
+            ]
+        }
