@@ -159,9 +159,9 @@ class WordReportWriter:
     ) -> None:
         """Add ranked email results to the Word document."""
 
-        document.add_heading("Ranked Email Results", level=1)
+        document.add_heading("Prioritised High-Risk Emails", level=1)
 
-        ranked_results = report.get_ranked_results()
+        ranked_results = report.get_high_risk_results()
 
         if ranked_results:
             ranked_table = document.add_table(rows=1, cols=3)
@@ -178,7 +178,7 @@ class WordReportWriter:
                 cells[1].text = str(result["overall_risk"]).title()
                 cells[2].text = str(result["risk_score"])
         else:
-            document.add_paragraph("No ranked email results available.")
+            document.add_paragraph("No high-risk emails identified.")
 
     def _add_failed_section(
         self, document, report: BatchReport

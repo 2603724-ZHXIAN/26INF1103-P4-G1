@@ -114,13 +114,16 @@ class TestWordReportWriter(unittest.TestCase):
         document = self._generate_document()
         text = self._document_text(document)
 
-        self.assertIn("Ranked Email Results", text)
+        self.assertIn("Prioritised High-Risk Emails", text)
         self.assertIn("95", text)
-        self.assertIn("55", text)
+        self.assertNotIn("55", text)
 
         ranked_table = document.tables[2]
+
+        self.assertEqual(len(ranked_table.rows), 2)
         self.assertEqual(ranked_table.rows[1].cells[0].text, "101")
-        self.assertEqual(ranked_table.rows[2].cells[0].text, "102")
+        self.assertEqual(ranked_table.rows[1].cells[1].text, "High")
+        self.assertEqual(ranked_table.rows[1].cells[2].text, "95")
 
     def test_campaign_grouping(self):
         document = self._generate_document()
@@ -155,7 +158,7 @@ class TestWordReportWriter(unittest.TestCase):
         text = self._document_text(document)
 
         self.assertIn("No classified threats available.", text)
-        self.assertIn("No ranked email results available.", text)
+        self.assertIn("No high-risk emails identified.", text)
         self.assertIn("No campaign groups available.", text)
         self.assertIn("No failed email analyses.", text)
         self.assertIn("No educational guidance available.", text)
