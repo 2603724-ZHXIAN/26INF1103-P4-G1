@@ -115,8 +115,8 @@ class TestBatchReport(unittest.TestCase):
         report = BatchReport({}, email_records)
 
         expected = [
-            {"threat_type": "Phishing", "count": 2},
-            {"threat_type": "Malware", "count": 1}
+            {"threat_type": "phishing", "count": 2},
+            {"threat_type": "malware", "count": 1}
         ]
 
         self.assertEqual(report.get_common_threats(), expected)
@@ -137,7 +137,7 @@ class TestBatchReport(unittest.TestCase):
 
         self.assertEqual(
             report.get_common_threats(),
-            [{"threat_type": "Phishing", "count": 1}]
+            [{"threat_type": "phishing", "count": 1}]
         )
 
 
@@ -161,7 +161,7 @@ class TestBatchReport(unittest.TestCase):
 
         self.assertEqual(
             report.get_common_threats(),
-            [{"threat_type": "Phishing", "count": 1}]
+            [{"threat_type": "phishing", "count": 1}]
         )
 
 
@@ -170,5 +170,27 @@ class TestBatchReport(unittest.TestCase):
 
         self.assertEqual(report.get_common_threats(), [])
 
+    def test_get_common_threats_case_insensitive(self):
+        email_records = [
+            {
+                "processing_status": "completed",
+                "primary_threat_type": "Phishing"
+            },
+            {
+                "processing_status": "completed",
+                "primary_threat_type": "phishing"
+            },
+            {
+                "processing_status": "completed",
+                "primary_threat_type": "PHISHING"
+            }
+        ]
+
+        report = BatchReport({}, email_records)
+
+        self.assertEqual(
+            report.get_common_threats(),
+            [{"threat_type": "phishing", "count": 3}]
+        )
 if __name__ == "__main__":
     unittest.main()
