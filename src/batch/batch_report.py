@@ -1,3 +1,5 @@
+from collections import Counter
+
 class BatchReport:
     """Prepare statistics and rankings for an analysed email batch."""
 
@@ -49,3 +51,31 @@ class BatchReport:
             "medium": round(medium / classified_total * 100, 2),
             "low": round(low / classified_total * 100, 2),
         }
+
+    def get_common_threats(self) -> list[dict]:
+        """Count primary threat types in completed email analyses."""
+
+        threat_types = []
+
+        for record in self._email_records:
+            if record.get("processing_status") != "completed":
+                continue
+
+            threat_type = record.get("primary_threat_type")
+
+            if not isinstance(threat_type, str):
+                continue
+
+            threat_type = threat_type.strip()
+
+            if not threat_type:
+                continue
+
+            threat_types.append(threat_type)
+
+        counts = Counter(threat_types)
+
+        return [
+            {"threat_type": threat, "count": count}
+            for threat, count in counts.most_common()
+        ]
