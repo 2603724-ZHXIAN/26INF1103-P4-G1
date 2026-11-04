@@ -50,37 +50,7 @@ class WordReportWriter:
             document.add_paragraph("No ranked email results available.")
 
         # Campaign Grouping
-        document.add_heading("Potential Scam Campaigns", level=1)
-
-        campaign_groups = report.get_campaign_groups()
-
-        if campaign_groups:
-            for index, group in enumerate(campaign_groups, start=1):
-                document.add_heading(f"Campaign Group {index}", level=2)
-
-                document.add_paragraph(
-                    f"Number of Emails: {group['count']}"
-                )
-
-                document.add_paragraph(
-                    "Submission IDs: "
-                    + ", ".join(str(id) for id in group["submission_ids"])
-                )
-
-                patterns = report.get_campaign_patterns(group)
-
-                if patterns["common_threat_types"]:
-                    document.add_paragraph("Common Threat Types:")
-
-                    for threat in patterns["common_threat_types"]:
-                        document.add_paragraph(
-                            f"{threat['threat_type'].title()}: {threat['count']}",
-                            style="List Bullet"
-                        )
-                else:
-                    document.add_paragraph("No common threat types identified.")
-        else:
-            document.add_paragraph("No campaign groups available.")
+        self._add_campaign_section(document, report)
 
         # Failed Email Details
         document.add_heading("Failed Email Analyses", level=1)
@@ -228,3 +198,40 @@ class WordReportWriter:
                 cells[1].text = str(threat["count"])
         else:
             document.add_paragraph("No classified threats available.")
+
+    def _add_campaign_section(
+        self, document, report: BatchReport
+    ) -> None:
+        """Add similar email groups to the Word document."""
+
+        document.add_heading("Potential Scam Campaigns", level=1)
+
+        campaign_groups = report.get_campaign_groups()
+
+        if campaign_groups:
+            for index, group in enumerate(campaign_groups, start=1):
+                document.add_heading(f"Campaign Group {index}", level=2)
+
+                document.add_paragraph(
+                    f"Number of Emails: {group['count']}"
+                )
+
+                document.add_paragraph(
+                    "Submission IDs: "
+                    + ", ".join(str(id) for id in group["submission_ids"])
+                )
+
+                patterns = report.get_campaign_patterns(group)
+
+                if patterns["common_threat_types"]:
+                    document.add_paragraph("Common Threat Types:")
+
+                    for threat in patterns["common_threat_types"]:
+                        document.add_paragraph(
+                            f"{threat['threat_type'].title()}: {threat['count']}",
+                            style="List Bullet"
+                        )
+                else:
+                    document.add_paragraph("No common threat types identified.")
+        else:
+            document.add_paragraph("No campaign groups available.")
