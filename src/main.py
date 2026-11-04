@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 
 from src.coordinator import EngineCoordinator
 from src.managers.ai_manager import AIManager
-from src.managers.data_manager import DataManager
+from src.managers.data_manager import DataManager, DataManagerError
 from src.managers.io_manager import IOManager
 from src.managers.logic_manager import LogicManager
 from src.services.gemini_client import GeminiClient
