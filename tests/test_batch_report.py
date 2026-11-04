@@ -296,5 +296,31 @@ class TestBatchReport(unittest.TestCase):
             [record["submission_id"] for record in report.email_records],
             [1, 2]
         )
+
+    def test_campaign_groups(self):
+        records = [
+            {
+                "submission_id": 1,
+                "input_value": "Your bank account is suspended",
+                "processing_status": "completed"
+            },
+            {
+                "submission_id": 2,
+                "input_value": "Your bank account is suspended!",
+                "processing_status": "completed"
+            }
+        ]
+
+        report = BatchReport({}, records)
+        groups = report.get_campaign_groups()
+
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(groups[0]["submission_ids"], [1, 2])
+
+
+    def test_campaign_groups_empty(self):
+        report = BatchReport({}, [])
+
+        self.assertEqual(report.get_campaign_groups(), [])
 if __name__ == "__main__":
     unittest.main()
