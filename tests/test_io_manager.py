@@ -192,13 +192,13 @@ class TestIOManagerPromptsAndRequests(unittest.TestCase):
         self.assertEqual(request["input_value"], "invoice.pdf")
         self.assertEqual(request["interaction_type"], "opened_or_downloaded_file")
 
-    @patch("builtins.input", side_effect=["6", "Telegram Investment Scam"])
+    @patch("builtins.input", side_effect=["8", "Telegram Investment Scam"])
     def test_collect_user_request_radar_option(self, mock_input):
         request = self.io.collect_user_request()
         self.assertEqual(request["action"], "emerging_threat_radar")
         self.assertEqual(request["topic"], "Telegram Investment Scam")
 
-    @patch("builtins.input", side_effect=["7", "y"])
+    @patch("builtins.input", side_effect=["9", "y"])
     def test_collect_user_request_exit_option(self, mock_input):
         request = self.io.collect_user_request()
         self.assertEqual(request["action"], "exit")
@@ -219,7 +219,7 @@ class TestIOManagerSeparationOfConcerns(unittest.TestCase):
     def tearDown(self):
         self._stdout_patch.stop()
 
-    @patch("builtins.input", side_effect=["4", "1", "invoice", "0"])
+    @patch("builtins.input", side_effect=["6", "1", "invoice", "0"])
     def test_history_query_delegates_to_data_manager_search(self, mock_input):
         self.mock_dm.search_records.return_value = [
             {
@@ -233,7 +233,7 @@ class TestIOManagerSeparationOfConcerns(unittest.TestCase):
         self.assertEqual(request["action"], "history_query")
         self.mock_dm.search_records.assert_called_once()
 
-    @patch("builtins.input", side_effect=["4", "2", "3", "0"])
+    @patch("builtins.input", side_effect=["6", "2", "3", "0"])
     def test_history_query_delegates_to_data_manager_risk_level(self, mock_input):
         self.mock_dm.get_records_by_risk_level.return_value = [
             {
@@ -247,7 +247,7 @@ class TestIOManagerSeparationOfConcerns(unittest.TestCase):
         self.assertEqual(request["action"], "history_query")
         self.mock_dm.get_records_by_risk_level.assert_called_once()
 
-    @patch("builtins.input", side_effect=["5", "0"])
+    @patch("builtins.input", side_effect=["7", "0"])
     def test_trending_threats_delegates_to_data_manager(self, mock_input):
         self.mock_dm.get_top_threat_types.return_value = [
             {"primary_threat_type": "Phishing", "total": 12}
