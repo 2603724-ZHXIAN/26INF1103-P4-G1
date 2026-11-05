@@ -1,5 +1,8 @@
 from datetime import datetime, timezone
-"""SQLite repository for the Phase 2 domain models.
+"""SQLite persistence for submissions, AI results and email batches.
+
+SRP: Handles storage and queries; terminal presentation, AI requests and
+risk classification remain in their respective managers.
 
 Database failures raise DataManagerError for the coordinator to handle.
 None from get_submission_by_id means not found, not database failure.
@@ -11,11 +14,57 @@ import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional
+from uuid import uuid4
 
 from ..models import AssessmentResult, Submission, ThreatEvidence
+from ..models.email_ingestion import IngestedEmail
 
 LOGGER = logging.getLogger(__name__)
 SCHEMA = """
+    CREATE TABLE IF NOT EXISTS email_batch (
+        batch_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        batch_reference TEXT NOT NULL UNIQUE,
+        created_at TEXT NOT NULL,
+
+        processing_status TEXT NOT NULL DEFAULT 'imported' CHECK (
+            processing_status IN (
+                'imported',
+                'processing',
+                'completed',
+                'partially_failed',
+                'failed'
+            )
+        ),
+
+        total_files INTEGER NOT NULL CHECK (total_files >= 0),
+        accepted_count INTEGER NOT NULL CHECK (accepted_count >= 0),
+        duplicate_count INTEGER NOT NULL CHECK (duplicate_count >= 0),
+        import_failed_count INTEGER NOT NULL CHECK (
+            import_failed_count >= 0
+        ),
+
+        CHECK (
+            total_files =
+                accepted_count + duplicate_count + import_failed_count
+        )
+    );
+
+    CREATE TABLE IF NOT EXISTS email_batch_issue (
+        issue_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        batch_reference TEXT NOT NULL,
+        item_id TEXT NOT NULL,
+        source_path TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('duplicate', 'failed')),
+        code TEXT NOT NULL,
+        message TEXT NOT NULL,
+        duplicate_of TEXT,
+
+        FOREIGN KEY (batch_reference)
+            REFERENCES email_batch(batch_reference)
+            ON DELETE CASCADE
+    );
+
+
     CREATE TABLE IF NOT EXISTS submission (
         submission_id INTEGER PRIMARY KEY AUTOINCREMENT,
         data_origin TEXT NOT NULL,
@@ -40,6 +89,28 @@ SCHEMA = """
         created_at TEXT NOT NULL,
         completed_at TEXT
     );
+
+        CREATE TABLE IF NOT EXISTS email_metadata (
+        submission_id INTEGER PRIMARY KEY,
+
+        item_id TEXT NOT NULL CHECK (length(trim(item_id)) > 0),
+        source_path TEXT NOT NULL,
+        file_hash TEXT NOT NULL,
+
+        subject TEXT NOT NULL,
+        sender TEXT NOT NULL,
+        reply_to TEXT NOT NULL,
+
+        recipients TEXT NOT NULL,
+        urls TEXT NOT NULL,
+        attachments TEXT NOT NULL,
+        warnings TEXT NOT NULL,
+
+        FOREIGN KEY (submission_id)
+            REFERENCES submission(submission_id)
+            ON DELETE CASCADE
+    );
+
 
     CREATE TABLE IF NOT EXISTS text_analysis (
         text_analysis_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -271,11 +342,23 @@ SCHEMA = """
 
 
 class DataManagerError(Exception):
-    """A persistence operation could not be completed."""
+    """Specialise Exception to identify persistence failures.
 
+    Callers can handle database failures separately from invalid input.
+    """
 
 class DataManager:
-    """Persist domain objects without exposing SQL to other layers."""
+    """Persist domain objects without exposing SQL to other layers.
+
+    Encapsulation: Protected attributes and helpers hide connection and
+    SQL details behind public save, load and query methods.
+
+    Association: Collaborates with Submission, AssessmentResult,
+    ThreatEvidence and IngestedEmail without owning their lifecycles.
+
+    SRP: Manages persistence without generating AI responses, calculating
+    risk scores or displaying terminal menus.
+    """
 
     def __init__(self, db_path: str = "data/database.db"):
         self._db_path = str(db_path)
@@ -286,6 +369,11 @@ class DataManager:
 
     @contextmanager
     def _get_connection(self):
+        """Manage a connection and transaction for one repository operation.
+
+        Commit on success, roll back on failure and close file connections.
+        Retain the owned in-memory connection until close() is called.
+        """
         connection = None
         try:
             if self._db_path != ":memory:":
@@ -317,6 +405,7 @@ class DataManager:
             self._memory_connection.close()
             self._memory_connection = None
 
+    # Shared validation keeps identifier checks consistent across operations.
     @staticmethod
     def _check_id(submission_id):
         if type(submission_id) is not int or submission_id <= 0:
@@ -336,48 +425,1000 @@ class DataManager:
         with self._get_connection() as connection:
             connection.executescript(SCHEMA)
 
-    def save_submission(self, submission: Submission) -> int:
-        """Insert/update a submission and its attached children atomically.
+    def create_email_batch(
+        self,
+        *,
+        total_files: int,
+        accepted_count: int,
+        duplicate_count: int,
+        import_failed_count: int,
+    ) -> str:
+        """Save import totals and return a unique batch reference."""
+        counts = {
+            "total_files": total_files,
+            "accepted_count": accepted_count,
+            "duplicate_count": duplicate_count,
+            "import_failed_count": import_failed_count,
+        }
 
-        A previously assigned ID must identify an existing record.
-        Existing evidence rows are replaced by the object's evidence collection.
-        Object IDs are updated only after the transaction commits successfully.
+        for name, value in counts.items():
+            if type(value) is not int or value < 0:
+                raise ValueError(
+                    f"{name} must be a non-negative integer."
+                )
+
+        expected_total = (
+            accepted_count
+            + duplicate_count
+            + import_failed_count
+        )
+
+        if total_files != expected_total:
+            raise ValueError(
+                "total_files must equal accepted_count + "
+                "duplicate_count + import_failed_count."
+            )
+
+        batch_reference = f"BATCH-{uuid4().hex.upper()}"
+        created_at = datetime.now(timezone.utc).isoformat()
+
+        with self._get_connection() as connection:
+            connection.execute(
+                """
+                INSERT INTO email_batch (
+                    batch_reference,
+                    created_at,
+                    processing_status,
+                    total_files,
+                    accepted_count,
+                    duplicate_count,
+                    import_failed_count
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    batch_reference,
+                    created_at,
+                    "imported",
+                    total_files,
+                    accepted_count,
+                    duplicate_count,
+                    import_failed_count,
+                ),
+            )
+
+        return batch_reference
+
+    def save_batch_import_issues(
+        self,
+        batch_reference: str,
+        issues: list[dict],
+    ) -> None:
+        """Replace a batch's import-issue snapshot atomically."""
+        if not isinstance(batch_reference, str):
+            raise TypeError("batch_reference must be a string.")
+
+        batch_reference = batch_reference.strip()
+
+        if not batch_reference:
+            raise ValueError("batch_reference cannot be empty.")
+
+        if not isinstance(issues, list):
+            raise TypeError("issues must be a list.")
+
+        values = []
+
+        for issue in issues:
+            if not isinstance(issue, dict):
+                raise TypeError("Each issue must be a dictionary.")
+
+            required_fields = (
+                "item_id",
+                "source_path",
+                "kind",
+                "code",
+                "message",
+            )
+
+            for field in required_fields:
+                value = issue.get(field)
+
+                if not isinstance(value, str) or not value.strip():
+                    raise ValueError(
+                        f"Issue {field} must be a non-empty string."
+                    )
+
+            if issue["kind"] not in {"duplicate", "failed"}:
+                raise ValueError(
+                    "Issue kind must be duplicate or failed."
+                )
+
+            duplicate_of = issue.get("duplicate_of")
+
+            if duplicate_of is not None:
+                if (
+                    not isinstance(duplicate_of, str)
+                    or not duplicate_of.strip()
+                ):
+                    raise ValueError(
+                        "duplicate_of must be a non-empty string or None."
+                    )
+
+            values.append(
+                (
+                    batch_reference,
+                    issue["item_id"],
+                    issue["source_path"],
+                    issue["kind"],
+                    issue["code"],
+                    issue["message"],
+                    duplicate_of,
+                )
+            )
+
+        with self._get_connection() as connection:
+            batch = connection.execute(
+                """
+                SELECT batch_reference
+                FROM email_batch
+                WHERE batch_reference = ?
+                """,
+                (batch_reference,),
+            ).fetchone()
+
+            if batch is None:
+                raise ValueError("No batch exists with that reference.")
+
+            connection.execute(
+                """
+                DELETE FROM email_batch_issue
+                WHERE batch_reference = ?
+                """,
+                (batch_reference,),
+            )
+
+            connection.executemany(
+                """
+                INSERT INTO email_batch_issue (
+                    batch_reference,
+                    item_id,
+                    source_path,
+                    kind,
+                    code,
+                    message,
+                    duplicate_of
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                values,
+            )
+
+    def get_batch_import_issues(
+        self,
+        batch_reference: str,
+    ) -> list[dict]:
+        """Retrieve saved duplicate and failed-import details."""
+        if not isinstance(batch_reference, str):
+            raise TypeError("batch_reference must be a string.")
+
+        batch_reference = batch_reference.strip()
+
+        if not batch_reference:
+            raise ValueError("batch_reference cannot be empty.")
+
+        with self._get_connection() as connection:
+            batch = connection.execute(
+                """
+                SELECT batch_reference
+                FROM email_batch
+                WHERE batch_reference = ?
+                """,
+                (batch_reference,),
+            ).fetchone()
+
+            if batch is None:
+                raise ValueError("No batch exists with that reference.")
+
+            rows = connection.execute(
+                """
+                SELECT item_id, source_path, kind, code, message, duplicate_of
+                FROM email_batch_issue
+                WHERE batch_reference = ?
+                ORDER BY issue_id
+                """,
+                (batch_reference,),
+            ).fetchall()
+
+        return [dict(row) for row in rows]
+
+    def update_email_batch_status(
+        self,
+        batch_reference: str,
+        status: str,
+    ) -> None:
+        """Persist a workflow status selected by the coordinator."""
+        if not isinstance(batch_reference, str):
+            raise TypeError("batch_reference must be a string.")
+
+        batch_reference = batch_reference.strip()
+
+        if not batch_reference:
+            raise ValueError("batch_reference cannot be empty.")
+
+        valid_statuses = {
+            "imported",
+            "processing",
+            "completed",
+            "partially_failed",
+            "failed",
+        }
+
+        if not isinstance(status, str) or status not in valid_statuses:
+            raise ValueError("Invalid email batch status.")
+
+        with self._get_connection() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE email_batch
+                SET processing_status = ?
+                WHERE batch_reference = ?
+                """,
+                (status, batch_reference),
+            )
+
+            if cursor.rowcount != 1:
+                raise ValueError("No batch exists with that reference.")
+
+    # Persist batch membership using the existing submission field.
+    # A database relationship does not itself establish OOP ownership.
+    def link_submission_to_batch(
+        self,
+        batch_reference: str,
+        submission_id: int,
+    ) -> None:
+        """Link a saved text submission to an existing email batch."""
+        self._check_id(submission_id)
+
+        if not isinstance(batch_reference, str):
+            raise TypeError("batch_reference must be a string.")
+
+        batch_reference = batch_reference.strip()
+
+        if not batch_reference:
+            raise ValueError("batch_reference cannot be empty.")
+
+        with self._get_connection() as connection:
+            batch = connection.execute(
+                """
+                SELECT batch_reference
+                FROM email_batch
+                WHERE batch_reference = ?
+                """,
+                (batch_reference,),
+            ).fetchone()
+
+            if batch is None:
+                raise ValueError("No batch exists with that reference.")
+
+            submission = connection.execute(
+                """
+                SELECT input_type, dataset_batch
+                FROM submission
+                WHERE submission_id = ?
+                """,
+                (submission_id,),
+            ).fetchone()
+
+            if submission is None:
+                raise ValueError("No submission exists with that ID.")
+
+            if submission["input_type"] != "text":
+                raise ValueError(
+                    "Email batch submissions must use input_type='text'."
+                )
+
+            current_batch = submission["dataset_batch"]
+
+            if current_batch not in (None, "", batch_reference):
+                raise ValueError(
+                    "This submission already belongs to another batch."
+                )
+
+            connection.execute(
+                """
+                UPDATE submission
+                SET dataset_batch = ?
+                WHERE submission_id = ?
+                """,
+                (batch_reference, submission_id),
+            )
+
+    def get_batch_submissions(
+        self,
+        batch_reference: str,
+    ) -> list[dict]:
+        """Retrieve saved submissions belonging to one email batch."""
+        if not isinstance(batch_reference, str):
+            raise TypeError("batch_reference must be a string.")
+
+        batch_reference = batch_reference.strip()
+
+        if not batch_reference:
+            raise ValueError("batch_reference cannot be empty.")
+
+        with self._get_connection() as connection:
+            batch = connection.execute(
+                """
+                SELECT batch_reference
+                FROM email_batch
+                WHERE batch_reference = ?
+                """,
+                (batch_reference,),
+            ).fetchone()
+
+            if batch is None:
+                raise ValueError("No batch exists with that reference.")
+
+            rows = connection.execute(
+                """
+                SELECT *
+                FROM submission
+                WHERE dataset_batch = ?
+                ORDER BY submission_id
+                """,
+                (batch_reference,),
+            ).fetchall()
+
+        return [dict(row) for row in rows]
+
+    def list_email_batches(self) -> list[dict]:
+        """List saved batches with counts calculated from saved submissions."""
+        with self._get_connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT
+                    b.*,
+                    COUNT(s.submission_id) AS saved_email_count,
+
+                    SUM(
+                        CASE WHEN s.processing_status = 'completed'
+                        THEN 1 ELSE 0 END
+                    ) AS completed_count,
+
+                    SUM(
+                        CASE WHEN s.processing_status = 'failed'
+                        THEN 1 ELSE 0 END
+                    ) AS analysis_failed_count,
+
+                    SUM(
+                        CASE
+                            WHEN s.processing_status = 'completed'
+                                AND a.overall_risk = 'high'
+                            THEN 1 ELSE 0
+                        END
+                    ) AS high_risk_count,
+
+                    SUM(
+                        CASE
+                            WHEN s.processing_status = 'completed'
+                                AND a.overall_risk = 'medium'
+                            THEN 1 ELSE 0
+                        END
+                    ) AS medium_risk_count,
+
+                    SUM(
+                        CASE
+                            WHEN s.processing_status = 'completed'
+                                AND a.overall_risk = 'low'
+                            THEN 1 ELSE 0
+                        END
+                    ) AS low_risk_count
+
+                FROM email_batch AS b
+
+                LEFT JOIN submission AS s
+                    ON s.dataset_batch = b.batch_reference
+
+                LEFT JOIN final_assessment AS a
+                    ON a.submission_id = s.submission_id
+
+                GROUP BY b.batch_id
+
+                ORDER BY b.created_at DESC, b.batch_id DESC
+                """
+            ).fetchall()
+
+        batches = []
+
+        for row in rows:
+            batches.append(dict(row))
+
+        return batches
+
+    def _query_batch_emails(
+        self,
+        batch_reference: str,
+        *,
+        keyword: str = "",
+        item_id: Optional[str] = None,
+        high_risk_only: bool = False,
+    ) -> list[dict]:
+        """Run the shared batch-scoped email query."""
+        if not isinstance(batch_reference, str):
+            raise TypeError("batch_reference must be a string.")
+
+        batch_reference = batch_reference.strip()
+
+        if not batch_reference:
+            raise ValueError("batch_reference cannot be empty.")
+
+        if not isinstance(keyword, str):
+            raise TypeError("keyword must be a string.")
+
+        if not isinstance(high_risk_only, bool):
+            raise TypeError("high_risk_only must be a boolean.")
+
+        if item_id is not None:
+            if not isinstance(item_id, str):
+                raise TypeError("item_id must be a string or None.")
+
+            item_id = item_id.strip()
+
+            if not item_id:
+                raise ValueError("item_id cannot be empty.")
+
+        conditions = ["s.dataset_batch = ?"]
+        parameters = [batch_reference]
+
+        if item_id is not None:
+            conditions.append("m.item_id = ?")
+            parameters.append(item_id)
+
+        keyword = keyword.strip()
+
+        if keyword:
+            # Treat %, _ and backslashes as literal search characters.
+            escaped_keyword = keyword.replace("\\", "\\\\")
+            escaped_keyword = escaped_keyword.replace("%", "\\%")
+            escaped_keyword = escaped_keyword.replace("_", "\\_")
+
+            pattern = f"%{escaped_keyword}%"
+
+            conditions.append(
+                r"""(
+                    COALESCE(m.subject, '') LIKE ? ESCAPE '\'
+                    OR COALESCE(m.sender, '') LIKE ? ESCAPE '\'
+                    OR COALESCE(m.source_path, '') LIKE ? ESCAPE '\'
+                    OR s.input_value LIKE ? ESCAPE '\'
+                )"""
+            )
+
+            for _ in range(4):
+                parameters.append(pattern)
+
+        if high_risk_only:
+            conditions.append("s.processing_status = 'completed'")
+            conditions.append("a.overall_risk = ?")
+            parameters.append("high")
+
+        query = """
+            SELECT
+                s.submission_id,
+                s.dataset_batch AS batch_reference,
+                s.processing_status,
+                s.error_message,
+                s.created_at,
+
+                m.item_id,
+                m.source_path,
+                m.subject,
+                m.sender,
+
+                a.overall_risk,
+                a.message_risk,
+                a.exposure_level,
+                a.priority
+
+            FROM submission AS s
+
+            LEFT JOIN email_metadata AS m
+                ON m.submission_id = s.submission_id
+
+            LEFT JOIN final_assessment AS a
+                ON a.submission_id = s.submission_id
+
+            WHERE
+        """
+
+        query += " AND ".join(conditions)
+        query += " ORDER BY s.submission_id"
+
+        with self._get_connection() as connection:
+            batch = connection.execute(
+                """
+                SELECT batch_reference
+                FROM email_batch
+                WHERE batch_reference = ?
+                """,
+                (batch_reference,),
+            ).fetchone()
+
+            if batch is None:
+                raise ValueError("No batch exists with that reference.")
+
+            rows = connection.execute(
+                query,
+                parameters,
+            ).fetchall()
+
+        emails = []
+
+        for row in rows:
+            emails.append(dict(row))
+
+        return emails
+
+    def search_batch_emails(
+        self,
+        batch_reference: str,
+        keyword: str = "",
+    ) -> list[dict]:
+        """Search one batch by subject, sender, source path or body.
+
+        An empty keyword lists all saved submissions in that batch.
+        """
+        return self._query_batch_emails(
+            batch_reference,
+            keyword=keyword,
+        )
+
+    def get_batch_high_risk_emails(
+        self,
+        batch_reference: str,
+    ) -> list[dict]:
+        """Return completed emails with a saved overall risk of high."""
+        return self._query_batch_emails(
+            batch_reference,
+            high_risk_only=True,
+        )
+
+    # Shared retrieval avoids separate education-loading implementations
+    # for batch details and historical reports.
+    def _load_saved_education(self, submission_id: int) -> dict:
+        """Load education from the saved AI response without another API call."""
+        self._check_id(submission_id)
+
+        with self._get_connection() as connection:
+            row = connection.execute(
+                """
+                SELECT
+                    CASE
+                        WHEN s.input_type = 'text'
+                        THEN ta.raw_gemini_response
+                        ELSE tai.raw_ai_response
+                    END AS raw_response
+                FROM submission AS s
+                LEFT JOIN text_analysis AS ta
+                    ON ta.submission_id = s.submission_id
+                LEFT JOIN technical_ai_analysis AS tai
+                    ON tai.submission_id = s.submission_id
+                WHERE s.submission_id = ?
+                """,
+                (submission_id,),
+            ).fetchone()
+
+        if row is None or row["raw_response"] is None:
+            return {}
+
+        try:
+            ai_result = json.loads(row["raw_response"])
+        except (TypeError, ValueError) as error:
+            raise DataManagerError(
+                "The saved AI response contains invalid JSON."
+            ) from error
+
+        if not isinstance(ai_result, dict):
+            raise DataManagerError(
+                "The saved AI response must be a JSON object."
+            )
+
+        education = ai_result.get("education", {})
+
+        if not isinstance(education, dict):
+            raise DataManagerError(
+                "The saved education must be a JSON object."
+            )
+
+        return education
+    
+    def get_batch_email_details(
+        self,
+        batch_reference: str,
+        item_id: str,
+    ) -> Optional[dict]:
+        """Load an email's content, metadata, assessment and education.
+
+        The email reference is resolved within the selected batch.
+        No new AI request is made.
+        """
+        matches = self._query_batch_emails(
+            batch_reference,
+            item_id=item_id,
+        )
+
+        if not matches:
+            return None
+
+        if len(matches) != 1:
+            raise DataManagerError(
+                "Multiple emails have the same reference in this batch."
+            )
+
+        submission_id = matches[0]["submission_id"]
+
+        submission = self.get_submission_by_id(submission_id)
+        metadata = self.get_email_metadata(submission_id)
+
+        if submission is None or metadata is None:
+            raise DataManagerError(
+                "The saved email details are incomplete."
+            )
+
+        submission = self.get_submission_by_id(submission_id)
+        metadata = self.get_email_metadata(submission_id)
+
+        if submission is None or metadata is None:
+            raise DataManagerError(
+                "The saved email details are incomplete."
+            )
+
+        education = self._load_saved_education(submission_id)
+
+        return {
+            "submission": submission,
+            "metadata": metadata,
+            "education": education,
+        }
+
+    def save_email_metadata(
+        self,
+        submission_id: int,
+        email: IngestedEmail,
+    ) -> None:
+        """Save parsed metadata for an email already linked to a batch."""
+        self._check_id(submission_id)
+
+        if not isinstance(email, IngestedEmail):
+            raise TypeError("email must be an IngestedEmail object.")
+
+        metadata = email.to_dict()
+
+        with self._get_connection() as connection:
+            submission = connection.execute(
+                """
+                SELECT s.input_type, s.dataset_batch
+                FROM submission AS s
+                JOIN email_batch AS b
+                    ON b.batch_reference = s.dataset_batch
+                WHERE s.submission_id = ?
+                """,
+                (submission_id,),
+            ).fetchone()
+
+            if submission is None:
+                raise ValueError(
+                    "The submission must exist and belong to an email batch."
+                )
+
+            if submission["input_type"] != "text":
+                raise ValueError(
+                    "Email metadata requires a text submission."
+                )
+
+            # EMAIL-001 may appear in different batches, but cannot
+            # identify two submissions within the same batch.
+            duplicate = connection.execute(
+                """
+                SELECT m.submission_id
+                FROM email_metadata AS m
+                JOIN submission AS s
+                    ON s.submission_id = m.submission_id
+                WHERE s.dataset_batch = ?
+                    AND m.item_id = ?
+                    AND m.submission_id != ?
+                """,
+                (
+                    submission["dataset_batch"],
+                    metadata["item_id"],
+                    submission_id,
+                ),
+            ).fetchone()
+
+            if duplicate is not None:
+                raise ValueError(
+                    "This email reference already exists in the batch."
+                )
+
+            existing = connection.execute(
+                """
+                SELECT item_id, file_hash, source_path
+                FROM email_metadata
+                WHERE submission_id = ?
+                """,
+                (submission_id,),
+            ).fetchone()
+
+            if existing is not None:
+                identity_fields = (
+                    "item_id",
+                    "file_hash",
+                    "source_path",
+                )
+
+                for field in identity_fields:
+                    if existing[field] != metadata[field]:
+                        raise ValueError(
+                            "Saved metadata belongs to a different email."
+                        )
+
+            connection.execute(
+                """
+                INSERT INTO email_metadata (
+                    submission_id,
+                    item_id,
+                    source_path,
+                    file_hash,
+                    subject,
+                    sender,
+                    reply_to,
+                    recipients,
+                    urls,
+                    attachments,
+                    warnings
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(submission_id) DO UPDATE SET
+                    subject = excluded.subject,
+                    sender = excluded.sender,
+                    reply_to = excluded.reply_to,
+                    recipients = excluded.recipients,
+                    urls = excluded.urls,
+                    attachments = excluded.attachments,
+                    warnings = excluded.warnings
+                """,
+                (
+                    submission_id,
+                    metadata["item_id"],
+                    metadata["source_path"],
+                    metadata["file_hash"],
+                    metadata["subject"],
+                    metadata["sender"],
+                    metadata["reply_to"],
+                    json.dumps(
+                        metadata["recipients"],
+                        ensure_ascii=False,
+                    ),
+                    json.dumps(
+                        metadata["urls"],
+                        ensure_ascii=False,
+                    ),
+                    json.dumps(
+                        metadata["attachments"],
+                        ensure_ascii=False,
+                    ),
+                    json.dumps(
+                        metadata["warnings"],
+                        ensure_ascii=False,
+                    ),
+                ),
+            )
+
+    def get_email_metadata(
+        self,
+        submission_id: int,
+    ) -> Optional[dict]:
+        """Load email metadata, returning None if it has not been saved."""
+        self._check_id(submission_id)
+
+        with self._get_connection() as connection:
+            row = connection.execute(
+                """
+                SELECT *
+                FROM email_metadata
+                WHERE submission_id = ?
+                """,
+                (submission_id,),
+            ).fetchone()
+
+        if row is None:
+            return None
+
+        metadata = dict(row)
+
+        list_fields = (
+            "recipients",
+            "urls",
+            "attachments",
+            "warnings",
+        )
+
+        for field in list_fields:
+            metadata[field] = self._decode_json(
+                metadata[field],
+                field,
+            )
+
+        # Reuse the existing model's validation instead of duplicating
+        # its rules for recipients, attachment metadata and file hashes.
+        try:
+            validation_data = dict(metadata)
+            validation_data["body_text"] = ""
+
+            IngestedEmail.from_dict(validation_data)
+
+        except (TypeError, ValueError, KeyError) as error:
+            raise DataManagerError(
+                "Stored email metadata is invalid."
+            ) from error
+
+        return metadata
+
+
+    def save_submission(self, submission: Submission) -> int:
+        """Save a submission while preserving existing batch membership.
+
+        Existing evidence rows are replaced by the object's collection.
+        Object IDs are updated only after the transaction commits.
+        An empty batch reference on an older object cannot clear a saved link.
         """
         if not isinstance(submission, Submission):
             raise TypeError("submission must be a Submission object.")
+
         data = submission.to_dict()
+
         fields = (
-            "data_origin", "dataset_batch", "input_type", "input_value",
-            "input_hash", "file_path", "interaction_type", "interaction_description",
-            "processing_status", "error_message", "created_at", "completed_at",
+            "data_origin",
+            "dataset_batch",
+            "input_type",
+            "input_value",
+            "input_hash",
+            "file_path",
+            "interaction_type",
+            "interaction_description",
+            "processing_status",
+            "error_message",
+            "created_at",
+            "completed_at",
         )
+
+        requested_batch = data["dataset_batch"]
+
+        if requested_batch is not None:
+            if not isinstance(requested_batch, str):
+                raise TypeError("dataset_batch must be a string or None.")
+
+            requested_batch = requested_batch.strip() or None
+
         with self._get_connection() as connection:
             sub_id = submission.submission_id
-            values = [data[name] for name in fields]
+            saved_batch = None
+
+            if sub_id is not None:
+                self._check_id(sub_id)
+
+                existing = connection.execute(
+                    """
+                    SELECT dataset_batch
+                    FROM submission
+                    WHERE submission_id = ?
+                    """,
+                    (sub_id,),
+                ).fetchone()
+
+                if existing is None:
+                    raise ValueError("No submission exists with that ID.")
+
+                saved_batch = existing["dataset_batch"]
+
+            if saved_batch:
+                if requested_batch not in (None, saved_batch):
+                    raise ValueError(
+                        "This submission already belongs to another batch."
+                    )
+
+                # Preserve the database link when an older object has None.
+                data["dataset_batch"] = saved_batch
+            else:
+                data["dataset_batch"] = requested_batch
+
+            effective_batch = data["dataset_batch"]
+
+            # dataset_batch also supports pre-existing dataset labels.
+            # Validate email batch references without rejecting those labels.
+            is_email_batch = (
+                data["data_origin"] == "batch_email"
+                or (
+                    effective_batch is not None
+                    and effective_batch.startswith("BATCH-")
+                )
+            )
+
+            if effective_batch and is_email_batch:
+                batch = connection.execute(
+                    """
+                    SELECT batch_reference
+                    FROM email_batch
+                    WHERE batch_reference = ?
+                    """,
+                    (effective_batch,),
+                ).fetchone()
+
+                if batch is None:
+                    raise ValueError(
+                        "No email batch exists with that reference."
+                    )
+
+                if data["input_type"] != "text":
+                    raise ValueError(
+                        "Email batch submissions must use input_type='text'."
+                    )
+
+            values = []
+
+            for name in fields:
+                values.append(data[name])
+
             if sub_id is None:
                 cursor = connection.execute(
-                    "INSERT INTO submission (" + ", ".join(fields) + ") VALUES ("
-                    + ", ".join("?" for _ in fields) + ")", values,
+                    "INSERT INTO submission ("
+                    + ", ".join(fields)
+                    + ") VALUES ("
+                    + ", ".join("?" for _ in fields)
+                    + ")",
+                    values,
                 )
+
                 sub_id = cursor.lastrowid
             else:
-                self._check_id(sub_id)
-                self._require_submission(connection, sub_id)
                 connection.execute(
-                    "UPDATE submission SET " + ", ".join(f"{name} = ?" for name in fields)
-                    + " WHERE submission_id = ?", values + [sub_id],
+                    "UPDATE submission SET "
+                    + ", ".join(
+                        f"{name} = ?" for name in fields
+                    )
+                    + " WHERE submission_id = ?",
+                    values + [sub_id],
                 )
+
+            # Save the submission's attached assessment and evidence using
+            # the same transaction as its parent record.
             assessment_id = None
+
             if submission.assessment is not None:
                 assessment_id = self._write_assessment(
-                    connection, sub_id, submission.assessment, "unknown"
+                    connection,
+                    sub_id,
+                    submission.assessment,
+                    "unknown",
                 )
-            evidence_ids = self._write_evidences(connection, sub_id, submission.evidences)
+
+            evidence_ids = self._write_evidences(
+                connection,
+                sub_id,
+                submission.evidences,
+            )
+
+        # Update domain objects only after the database transaction commits.
         submission.submission_id = sub_id
+
         if assessment_id is not None:
             submission.assessment.assessment_id = assessment_id
-        for evidence, evidence_id in zip(submission.evidences, evidence_ids):
+
+        for evidence, evidence_id in zip(
+            submission.evidences,
+            evidence_ids,
+        ):
             evidence.evidence_id = evidence_id
+
         return sub_id
 
     def _write_assessment(self, connection, submission_id, assessment, model_name):
@@ -488,7 +1529,10 @@ class DataManager:
             raise DataManagerError(f"Stored {field} is invalid.") from error
 
     def get_submission_by_id(self, submission_id: int):
-        """Return the composed domain object, or None when the ID is absent."""
+        """Reconstruct a submission with its saved assessment and evidence.
+
+        Return None when absent; raise DataManagerError for invalid storage.
+        """
         self._check_id(submission_id)
         with self._get_connection() as connection:
             row = connection.execute("SELECT * FROM submission WHERE submission_id = ?", (submission_id,)).fetchone()
@@ -638,6 +1682,16 @@ class DataManager:
                     message_classification = excluded.message_classification,
                     primary_threat_type = excluded.primary_threat_type,
                     analysis_confidence = excluded.analysis_confidence,
+                    language = excluded.language,
+                    message_type = excluded.message_type,
+                    claimed_entity = excluded.claimed_entity,
+                    requested_actions = excluded.requested_actions,
+                    possible_intents = excluded.possible_intents,
+                    extracted_urls = excluded.extracted_urls,
+                    extracted_contacts = excluded.extracted_contacts,
+                    suspected_threat_types = excluded.suspected_threat_types,
+                    other_warning_signs = excluded.other_warning_signs,
+                    user_exposure = excluded.user_exposure,
                     model_name = excluded.model_name,
                     raw_gemini_response = excluded.raw_gemini_response""",
                 (
@@ -679,10 +1733,13 @@ class DataManager:
                     raw_vt_response, created_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(submission_id) DO UPDATE SET
+                    resource_type = excluded.resource_type,
+                    resource_identifier = excluded.resource_identifier,
                     malicious_count = excluded.malicious_count,
                     suspicious_count = excluded.suspicious_count,
                     harmless_count = excluded.harmless_count,
                     undetected_count = excluded.undetected_count,
+                    timeout_count = excluded.timeout_count,
                     reputation = excluded.reputation,
                     raw_vt_response = excluded.raw_vt_response""",
                 (
@@ -800,9 +1857,51 @@ class DataManager:
             "matched_rules", "matched_exposures",
         ]
         for field in json_fields:
-            if field in report and report[field]:
-                try:
-                    report[field] = json.loads(report[field])
-                except (json.JSONDecodeError, TypeError):
-                    pass
+            value = report.get(field)
+
+            if value is None:
+                continue
+
+            try:
+                decoded = json.loads(value)
+            except (ValueError, TypeError) as error:
+                raise DataManagerError(
+                    f"Stored report field '{field}' contains invalid JSON."
+                ) from error
+
+            expected_type = dict if field == "user_exposure" else list
+
+            if not isinstance(decoded, expected_type):
+                raise DataManagerError(
+                    f"Stored report field '{field}' has an invalid type."
+                )
+
+            report[field] = decoded
+
+        education = self._load_saved_education(submission_id)
+
+        education_fields = {
+            "threat_explanations": list,
+            "threat_summary": str,
+            "what_it_is": str,
+            "why_dangerous": list,
+            "preventive_steps": list,
+            "recovery_steps": list,
+            "limitations": list,
+            "recovery_by_action": dict,
+        }
+
+        for field, expected_type in education_fields.items():
+            if field not in education:
+                continue
+
+            value = education[field]
+
+            if not isinstance(value, expected_type):
+                raise DataManagerError(
+                    f"Saved education field '{field}' has an invalid type."
+                )
+
+            report[field] = value
+
         return report

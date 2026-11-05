@@ -7,17 +7,21 @@ doubles so the tests validate routing and state-machine logic only.
 import unittest
 import copy
 from unittest.mock import MagicMock, patch
+import hashlib
+import tempfile
+from pathlib import Path
+
 
 from src.coordinator import EngineCoordinator
 from src.interfaces.llm_client import BaseLLMClient
 from src.managers.ai_manager import AIManager
-from src.managers.data_manager import DataManager
+from src.managers.data_manager import DataManager, DataManagerError
 from src.managers.io_manager import IOManager
 from src.managers.logic_manager import LogicManager
 from src.models.assessment import AssessmentResult
 from src.models.submission import Submission
 from src.services.virustotal_scanner import VirusTotalScanner
-
+from src.models.email_ingestion import IngestedEmail
 
 # ---------------------------------------------------------------------------
 # Minimal fakes
@@ -193,6 +197,7 @@ class TestEngineCoordinatorConstruction(unittest.TestCase):
 
     def test_coordinator_stores_all_managers(self):
         coord = _make_coordinator()
+        self.addCleanup(coord._data.close)
         self.assertIsInstance(coord._io, IOManager)
         self.assertIsInstance(coord._ai, AIManager)
         self.assertIsInstance(coord._logic, LogicManager)
@@ -203,6 +208,7 @@ class TestEngineCoordinatorConstruction(unittest.TestCase):
         """Aggregation: scanner is optional at construction."""
         llm = _MockLLMClient()
         data_manager = DataManager(db_path=":memory:")
+        self.addCleanup(data_manager.close)
         data_manager.initialize_database()
         io_manager = IOManager(use_color=False, data_manager=data_manager)
         coord = EngineCoordinator(
@@ -220,6 +226,7 @@ class TestTextPipeline(unittest.TestCase):
 
     def setUp(self):
         self.coord = _make_coordinator()
+        self.addCleanup(self.coord._data.close)
         # Silence IOManager output
         self.coord._io._print = lambda *a, **kw: None
         self.coord._io.display_assessment = lambda *a, **kw: None
@@ -303,6 +310,7 @@ class TestResourcePipeline(unittest.TestCase):
 
     def setUp(self):
         self.coord = _make_coordinator()
+        self.addCleanup(self.coord._data.close)
         self.coord._io._print = lambda *a, **kw: None
         self.coord._io.display_assessment = lambda *a, **kw: None
 
@@ -375,6 +383,7 @@ class TestResourcePipelineAIIntegration(unittest.TestCase):
 
     def setUp(self):
         self.coord = _make_coordinator()
+        self.addCleanup(self.coord._data.close)
         self.coord._io._print = lambda *a, **kw: None
         self.coord._io.display_assessment = lambda *a, **kw: None
         self.request = {
@@ -386,6 +395,50 @@ class TestResourcePipelineAIIntegration(unittest.TestCase):
             "interaction_description": None,
             "file_path": "/tmp/invoice.exe",
         }
+
+    def test_result_save_failure_does_not_report_completion(self):
+        """A failed result save must not produce a successful completion."""
+        self.coord._io.display_assessment = MagicMock()
+
+        with patch.object(
+            self.coord._data,
+            "save_vt_scan_result",
+            side_effect=DataManagerError("Simulated telemetry save failure."),
+        ):
+            self.coord._handle_resource_pipeline(self.request)
+
+        saved = self.coord._data.get_submission_by_id(1)
+
+        self.assertIsNotNone(saved)
+        self.assertEqual(saved.processing_status, "failed")
+        self.assertIn("could not be saved", saved.error_message.lower())
+        self.coord._io.display_assessment.assert_not_called()
+
+    def test_completion_save_failure_does_not_display_success(self):
+        """The final completion update must also succeed."""
+        self.coord._io.display_assessment = MagicMock()
+        original_save = self.coord._data.save_submission
+
+        def fail_completed_save(submission):
+            if submission.processing_status == "completed":
+                raise DataManagerError(
+                    "Simulated completion save failure."
+                )
+
+            return original_save(submission)
+
+        with patch.object(
+            self.coord._data,
+            "save_submission",
+            side_effect=fail_completed_save,
+        ):
+            self.coord._handle_resource_pipeline(self.request)
+
+        saved = self.coord._data.get_submission_by_id(1)
+
+        self.assertIsNotNone(saved)
+        self.assertEqual(saved.processing_status, "failed")
+        self.coord._io.display_assessment.assert_not_called()
 
     def test_ai_failure_marks_submission_failed_and_skips_logic(self):
         self.coord._ai.analyze_technical_threat = MagicMock(
@@ -451,6 +504,7 @@ class TestThreatRadarPipeline(unittest.TestCase):
 
     def setUp(self):
         self.coord = _make_coordinator()
+        self.addCleanup(self.coord._data.close)
         self.coord._io._print = lambda *a, **kw: None
         self.coord._io.display_threat_radar = MagicMock()
 
@@ -496,6 +550,7 @@ class TestRunLoopDispatch(unittest.TestCase):
 
     def setUp(self):
         self.coord = _make_coordinator()
+        self.addCleanup(self.coord._data.close)
         self.coord._io._print = lambda *a, **kw: None
 
     def test_run_exits_on_exit_action(self):
@@ -569,6 +624,7 @@ class TestHelperMethods(unittest.TestCase):
 
     def setUp(self):
         self.coord = _make_coordinator()
+        self.addCleanup(self.coord._data.close)
         self.coord._io._print = lambda *a, **kw: None
 
     def test_get_model_name_returns_string(self):
@@ -591,6 +647,383 @@ class TestHelperMethods(unittest.TestCase):
         # Must not raise; should log warning silently
         self.coord._safe_update_submission(sub)
 
+class TestBatchCoordinator(unittest.TestCase):
+    """Verify batch orchestration without live provider requests."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+
+        self.database_path = Path(self.temp.name) / "batch_test.db"
+
+        self.data = DataManager(db_path=str(self.database_path))
+        self.addCleanup(self.data.close)
+        self.data.initialize_database()
+
+        self.io = MagicMock()
+        self.ai = MagicMock()
+        self.ai.llm_client.model_name = "offline-test-model"
+
+        self.logic = LogicManager()
+        self.ingestion = MagicMock()
+
+        self.coord = EngineCoordinator(
+            io_manager=self.io,
+            ai_manager=self.ai,
+            logic_manager=self.logic,
+            data_manager=self.data,
+            scanner=None,
+            ingestion_service=self.ingestion,
+        )
+
+        self.first_email = self._make_email(
+            "EMAIL-001",
+            "First email",
+            "First message body.",
+        )
+
+        self.second_email = self._make_email(
+            "EMAIL-002",
+            "Second email",
+            "Second message body.",
+        )
+
+        self.ingestion.ingest_paths.return_value = {
+            "accepted": [
+                self.first_email,
+                self.second_email,
+            ],
+            "issues": [],
+        }
+
+        self.ai.analyze_message.side_effect = [
+            self._make_batch_response(),
+            self._make_batch_response(),
+        ]
+
+    @staticmethod
+    def _make_email(item_id, subject, body):
+        """Build an ingestion fixture using the existing domain model."""
+        return IngestedEmail(
+            item_id=item_id,
+            source_path=f"test_emails/{item_id}.eml",
+            file_hash=hashlib.sha256(
+                body.encode("utf-8")
+            ).hexdigest(),
+            body_text=body,
+            subject=subject,
+            sender="sender@example.com",
+            recipients=["recipient@example.com"],
+        )
+
+    @staticmethod
+    def _make_batch_response():
+        """Extend this file's existing ordinary AI fixture for batch tests."""
+        response = copy.deepcopy(_VALID_AI_RESPONSE)
+
+        response["message_type"] = "email"
+
+        exposure = response["user_exposure"]
+
+        for name in exposure:
+            if name != "description_summary":
+                exposure[name] = False
+
+        exposure["description_summary"] = (
+            "Recipient actions are unknown."
+        )
+
+        scenarios = {}
+
+        for action in AIManager.RECOVERY_ACTIONS:
+            scenarios[action] = {
+                "steps": [
+                    f"If this happened, follow the test guidance for {action}."
+                ]
+            }
+
+        response["education"]["recovery_by_action"] = scenarios
+
+        return response
+
+    def _run_batch(self):
+        return self.coord._handle_batch_pipeline(
+            {
+                "action": "batch_email_analysis",
+                "paths": ["test_emails"],
+            }
+        )
+
+    def test_batch_reuses_shared_text_pipeline(self):
+        """Every accepted email delegates to the common processor."""
+        with patch.object(
+            self.coord,
+            "_process_text_submission",
+            return_value={
+                "success": True,
+                "submission_id": None,
+                "error": None,
+                "database_error": False,
+            },
+        ) as processor:
+            result = self._run_batch()
+
+        self.assertEqual(processor.call_count, 2)
+        self.assertEqual(result["unprocessed_count"], 0)
+
+        first_call = processor.call_args_list[0]
+
+        self.assertIs(
+            first_call.kwargs["email"],
+            self.first_email,
+        )
+
+        submitted_record = first_call.args[0]
+
+        self.assertEqual(
+            submitted_record.dataset_batch,
+            result["batch_reference"],
+        )
+
+    def test_batch_requests_scenarios_with_unknown_exposure(self):
+        """Batch import must not imply recipient interaction."""
+        self._run_batch()
+
+        self.assertEqual(
+            self.ai.analyze_message.call_count,
+            2,
+        )
+
+        for provider_call in self.ai.analyze_message.call_args_list:
+            arguments = provider_call.kwargs
+
+            self.assertIs(arguments["include_scenarios"], True)
+            self.assertEqual(arguments["interaction"], "unknown")
+            self.assertIn(
+                "unknown",
+                arguments["interaction_description"].lower(),
+            )
+
+    def test_results_and_education_survive_reopening(self):
+        """Completed analysis and metadata persist across connections."""
+        result = self._run_batch()
+
+        self.assertEqual(len(result["results"]), 2)
+
+        for item in result["results"]:
+            self.assertTrue(item["success"])
+
+        self.data.close()
+
+        reopened = DataManager(db_path=str(self.database_path))
+
+        try:
+            details = reopened.get_batch_email_details(
+                result["batch_reference"],
+                "EMAIL-001",
+            )
+
+            self.assertIsNotNone(details)
+
+            submission = details["submission"]
+
+            self.assertEqual(
+                submission.processing_status,
+                "completed",
+            )
+            self.assertIsNotNone(submission.assessment)
+
+            self.assertEqual(
+                details["metadata"]["subject"],
+                "First email",
+            )
+
+            scenarios = details["education"]["recovery_by_action"]
+
+            self.assertEqual(
+                set(scenarios),
+                set(AIManager.RECOVERY_ACTIONS),
+            )
+
+            self.assertTrue(
+                scenarios["clicked_link"]["steps"]
+            )
+
+        finally:
+            reopened.close()
+
+    def test_ai_failure_does_not_stop_next_email(self):
+        """A failed AI request must not stop a later email."""
+        self.ai.analyze_message.side_effect = [
+            {"error": "Simulated provider failure."},
+            self._make_batch_response(),
+        ]
+
+        result = self._run_batch()
+
+        self.assertEqual(len(result["results"]), 2)
+        self.assertFalse(result["results"][0]["success"])
+        self.assertTrue(result["results"][1]["success"])
+        self.assertEqual(result["unprocessed_count"], 0)
+
+        rows = self.data.get_batch_submissions(
+            result["batch_reference"]
+        )
+
+        self.assertEqual(rows[0]["processing_status"], "failed")
+        self.assertEqual(rows[1]["processing_status"], "completed")
+
+        first = self.data.get_submission_by_id(
+            rows[0]["submission_id"]
+        )
+
+        self.assertIsNone(first.assessment)
+
+    def test_database_failure_stops_remaining_emails(self):
+        """A persistence failure must not be reported as success."""
+        with patch.object(
+            self.data,
+            "save_email_metadata",
+            side_effect=DataManagerError(
+                "Simulated database failure."
+            ),
+        ):
+            result = self._run_batch()
+
+        self.assertEqual(len(result["results"]), 1)
+        self.assertFalse(result["results"][0]["success"])
+        self.assertTrue(
+            result["results"][0]["database_error"]
+        )
+        self.assertEqual(result["unprocessed_count"], 1)
+
+        self.ai.analyze_message.assert_not_called()
+        self.io.display_assessment.assert_not_called()
+
+        rows = self.data.get_batch_submissions(
+            result["batch_reference"]
+        )
+
+        self.assertEqual(len(rows), 1)
+        self.assertNotEqual(
+            rows[0]["processing_status"],
+            "completed",
+        )
+
+    def test_successful_batch_saves_completed_status(self):
+        """Successful email processing saves completed batch status."""
+        result = self._run_batch()
+
+        self.assertEqual(result["processing_status"], "completed")
+        self.assertTrue(result["status_saved"])
+        self.assertIsNone(result["status_error"])
+        self.assertEqual(result["successful_count"], 2)
+        self.assertEqual(result["analysis_failed_count"], 0)
+
+        saved_batch = next(
+            batch
+            for batch in self.data.list_email_batches()
+            if batch["batch_reference"] == result["batch_reference"]
+        )
+
+        self.assertEqual(
+            saved_batch["processing_status"],
+            "completed",
+        )
+
+    def test_mixed_results_save_partially_failed_status(self):
+        """One AI failure and one success produce partially_failed."""
+        self.ai.analyze_message.side_effect = [
+            {"error": "Simulated first-email failure."},
+            self._make_batch_response(),
+        ]
+
+        result = self._run_batch()
+
+        self.assertEqual(
+            result["processing_status"],
+            "partially_failed",
+        )
+        self.assertTrue(result["status_saved"])
+        self.assertEqual(result["successful_count"], 1)
+        self.assertEqual(result["analysis_failed_count"], 1)
+        self.assertEqual(result["unprocessed_count"], 0)
+
+        saved_batch = next(
+            batch
+            for batch in self.data.list_email_batches()
+            if batch["batch_reference"] == result["batch_reference"]
+        )
+
+        self.assertEqual(
+            saved_batch["processing_status"],
+            "partially_failed",
+        )
+
+    def test_all_ai_failures_save_failed_status(self):
+        """A batch with no successful analyses saves failed status."""
+        self.ai.analyze_message.side_effect = [
+            {"error": "Simulated first-email failure."},
+            {"error": "Simulated second-email failure."},
+        ]
+
+        result = self._run_batch()
+
+        self.assertEqual(result["processing_status"], "failed")
+        self.assertTrue(result["status_saved"])
+        self.assertEqual(result["successful_count"], 0)
+        self.assertEqual(result["analysis_failed_count"], 2)
+        self.assertEqual(result["unprocessed_count"], 0)
+
+        saved_batch = next(
+            batch
+            for batch in self.data.list_email_batches()
+            if batch["batch_reference"] == result["batch_reference"]
+        )
+
+        self.assertEqual(
+            saved_batch["processing_status"],
+            "failed",
+        )
+
+    def test_final_status_save_failure_is_reported(self):
+        """A failed final update must not claim the status was saved."""
+        original_update = self.data.update_email_batch_status
+
+        def update_with_final_failure(batch_reference, status):
+            if status == "completed":
+                raise DataManagerError(
+                    "Simulated final status save failure."
+                )
+
+            return original_update(batch_reference, status)
+
+        with patch.object(
+            self.data,
+            "update_email_batch_status",
+            side_effect=update_with_final_failure,
+        ):
+            result = self._run_batch()
+
+        self.assertEqual(result["successful_count"], 2)
+        self.assertEqual(result["processing_status"], "completed")
+        self.assertFalse(result["status_saved"])
+        self.assertIn(
+            "Simulated final status save failure.",
+            result["status_error"],
+        )
+
+        saved_batch = next(
+            batch
+            for batch in self.data.list_email_batches()
+            if batch["batch_reference"] == result["batch_reference"]
+        )
+
+        # The initial processing update succeeded, but the final one failed.
+        self.assertEqual(
+            saved_batch["processing_status"],
+            "processing",
+        )
 
 if __name__ == "__main__":
     unittest.main()

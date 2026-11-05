@@ -15,6 +15,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from src.managers import IOManager
+from src.managers.data_manager import DataManager
 from src.models import AssessmentResult, Submission, ThreatEvidence
 
 
@@ -192,13 +193,13 @@ class TestIOManagerPromptsAndRequests(unittest.TestCase):
         self.assertEqual(request["input_value"], "invoice.pdf")
         self.assertEqual(request["interaction_type"], "opened_or_downloaded_file")
 
-    @patch("builtins.input", side_effect=["6", "Telegram Investment Scam"])
+    @patch("builtins.input", side_effect=["8", "Telegram Investment Scam"])
     def test_collect_user_request_radar_option(self, mock_input):
         request = self.io.collect_user_request()
         self.assertEqual(request["action"], "emerging_threat_radar")
         self.assertEqual(request["topic"], "Telegram Investment Scam")
 
-    @patch("builtins.input", side_effect=["7", "y"])
+    @patch("builtins.input", side_effect=["9", "y"])
     def test_collect_user_request_exit_option(self, mock_input):
         request = self.io.collect_user_request()
         self.assertEqual(request["action"], "exit")
@@ -219,7 +220,7 @@ class TestIOManagerSeparationOfConcerns(unittest.TestCase):
     def tearDown(self):
         self._stdout_patch.stop()
 
-    @patch("builtins.input", side_effect=["4", "1", "invoice", "0"])
+    @patch("builtins.input", side_effect=["6", "1", "invoice", "0"])
     def test_history_query_delegates_to_data_manager_search(self, mock_input):
         self.mock_dm.search_records.return_value = [
             {
@@ -233,7 +234,7 @@ class TestIOManagerSeparationOfConcerns(unittest.TestCase):
         self.assertEqual(request["action"], "history_query")
         self.mock_dm.search_records.assert_called_once()
 
-    @patch("builtins.input", side_effect=["4", "2", "3", "0"])
+    @patch("builtins.input", side_effect=["6", "2", "3", "0"])
     def test_history_query_delegates_to_data_manager_risk_level(self, mock_input):
         self.mock_dm.get_records_by_risk_level.return_value = [
             {
@@ -247,7 +248,27 @@ class TestIOManagerSeparationOfConcerns(unittest.TestCase):
         self.assertEqual(request["action"], "history_query")
         self.mock_dm.get_records_by_risk_level.assert_called_once()
 
-    @patch("builtins.input", side_effect=["5", "0"])
+    @patch("builtins.input", side_effect=["6", "2", "2"])
+    def test_history_medium_option_uses_valid_risk_value(self, mock_input):
+        """The middle historical risk option must query medium."""
+        manager = DataManager(":memory:")
+        manager.initialize_database()
+        self.addCleanup(manager.close)
+
+        self.io.data_manager = manager
+
+        with patch.object(
+            manager,
+            "get_records_by_risk_level",
+            wraps=manager.get_records_by_risk_level,
+        ) as query:
+            request = self.io.collect_user_request()
+
+        self.assertEqual(request["action"], "history_query")
+        self.assertEqual(request["records_found"], 0)
+        query.assert_called_once_with("medium")
+
+    @patch("builtins.input", side_effect=["7", "0"])
     def test_trending_threats_delegates_to_data_manager(self, mock_input):
         self.mock_dm.get_top_threat_types.return_value = [
             {"primary_threat_type": "Phishing", "total": 12}
@@ -267,6 +288,101 @@ class TestIOManagerReporting(unittest.TestCase):
     def setUp(self):
         self.io = IOManager(use_color=False)
 
+    def test_email_selection_accepts_number_and_full_reference(self):
+        """Selection uses the reference number, not the row position."""
+        emails = [{"item_id": "EMAIL-004"}]
+
+        for entered in ("4", "004", "EMAIL-004", "email-004"):
+            with self.subTest(entered=entered):
+                with patch("builtins.input", return_value=entered):
+                    with patch("sys.stdout", new_callable=io.StringIO):
+                        selected = self.io.select_batch_email(emails)
+
+                self.assertEqual(selected, "EMAIL-004")
+
+    def test_batch_selection_accepts_number_and_full_reference(self):
+        """Batch selection returns its internal reference."""
+        batches = [
+            {
+                "batch_id": 12,
+                "batch_reference": "BATCH-INTERNAL-REFERENCE",
+                "created_at": "2026-11-04T06:27:00+00:00",
+                "accepted_count": 2,
+                "high_risk_count": 1,
+                "medium_risk_count": 1,
+                "low_risk_count": 0,
+                "analysis_failed_count": 0,
+            }
+        ]
+
+        for entered in ("12", "0012", "BATCH-0012"):
+            with self.subTest(entered=entered):
+                with patch("builtins.input", return_value=entered):
+                    with patch("sys.stdout", new_callable=io.StringIO):
+                        selected = self.io.select_previous_email_batch(
+                            batches
+                        )
+
+                self.assertEqual(
+                    selected,
+                    "BATCH-INTERNAL-REFERENCE",
+                )
+
+    def test_saved_guidance_does_not_change_recorded_exposure(self):
+        """Browsing a hypothetical situation must not modify the record."""
+        submission = Submission(
+            "text",
+            "Example imported email",
+            interaction_type="other",
+            interaction_description="Recipient actions are unknown.",
+            data_origin="batch_email",
+        )
+
+        details = {
+            "submission": submission,
+            "metadata": {
+                "item_id": "EMAIL-001",
+                "subject": "Example account email",
+                "sender": "notice@example.com",
+            },
+            "education": {
+                "threat_summary": "Example saved explanation.",
+                "preventive_steps": ["Verify independently."],
+                "recovery_by_action": {
+                    "entered_information": {
+                        "steps": ["SAVED PASSWORD RECOVERY GUIDANCE"]
+                    }
+                },
+            },
+        }
+
+        before = submission.to_dict()
+        manager = MagicMock()
+        screen = IOManager(
+            use_color=False,
+            data_manager=manager,
+        )
+
+        # Education -> mitigation -> entered information ->
+        # education -> details -> previous list.
+        with patch(
+            "builtins.input",
+            side_effect=["2", "2", "3", "0", "0", "0"],
+        ):
+            with patch(
+                "sys.stdout",
+                new_callable=io.StringIO,
+            ) as output:
+                screen.review_batch_email(details)
+
+        self.assertIn(
+            "SAVED PASSWORD RECOVERY GUIDANCE",
+            output.getvalue(),
+        )
+        self.assertIn("User Exposure:   Unknown", output.getvalue())
+        self.assertEqual(submission.to_dict(), before)
+        self.assertEqual(manager.mock_calls, [])
+        
     def test_display_assessment_with_submission(self):
         assessment = AssessmentResult(
             is_scam=True,

@@ -1,7 +1,7 @@
 """Presentation layer: Terminal UI and user interaction manager.
 
 Strict Separation of Concerns:
-- Handles CLI formatting, banners, prompts, curses/pick table navigation, and input validation.
+- Handles CLI formatting, prompts, curses navigation, numbered fallback menus and input validation.
 - Encapsulates terminal styling properties (_use_color, _banner_width, _theme_colors).
 - Does NOT calculate threat scores (delegates to LogicManager and AI layers).
 - Does NOT execute raw SQL queries directly (delegates historical & trending queries to DataManager).
@@ -9,10 +9,14 @@ Strict Separation of Concerns:
 
 import curses
 import hashlib
+import json
 import locale
 import os
 import sys
+from textwrap import wrap
 from typing import Any, Dict, List, Optional, Tuple, Union
+from datetime import datetime, timedelta, timezone
+from pathlib import PureWindowsPath
 
 # Handle platform-specific console encoding for Unicode emojis
 if hasattr(sys.stdout, "reconfigure"):
@@ -28,10 +32,6 @@ if hasattr(sys.stderr, "reconfigure"):
 
 import validators
 
-try:
-    from pick import pick
-except ImportError:
-    pick = None
 
 from ..config import DB_PATH
 from ..models.assessment import AssessmentResult
@@ -106,6 +106,9 @@ class IOManager:
         if theme_colors is not None:
             self.theme_colors = theme_colors
 
+        # Dependency injection allows the application to supply its shared
+        # DataManager, or tests to supply a substitute.
+        # IOManager retains a collaborator reference without owning it.
         self._data_manager: Any = data_manager if data_manager is not None else default_db
         self._db_path: str = str(db_path or DB_PATH)
 
@@ -113,6 +116,8 @@ class IOManager:
     # Properties & Encapsulation
     # -------------------------------------------------------------------------
 
+    # Public properties expose supported settings while underscore attributes
+    # and helpers remain implementation details by Python convention.
     @property
     def use_color(self) -> bool:
         """Return whether ANSI color formatting is enabled."""
@@ -234,10 +239,12 @@ class IOManager:
             f"  {yellow}[1]{reset} 📧 Analyze Suspicious Text / Scam Email Message",
             f"  {yellow}[2]{reset} 🔗 Analyze Suspicious URL",
             f"  {yellow}[3]{reset} 📎 Analyze File (Path)",
-            f"  {yellow}[4]{reset} 🗄️  Query Historical Incident Database",
-            f"  {yellow}[5]{reset} 📈 Top Trending Attacks / Scams",
-            f"  {yellow}[6]{reset} 🌐 Emerging Threat & Scam Radar (Live Web Grounding)",
-            f"  {yellow}[7]{reset} 🚪 Exit",
+            f"  {yellow}[4]{reset} 📨 Batch Input Analysis",
+            f"  {yellow}[5]{reset} 🗂️  Previous Batch Records",
+            f"  {yellow}[6]{reset} 🗄️  Query Historical Incident Database",
+            f"  {yellow}[7]{reset} 📈 Top Trending Attacks / Scams",
+            f"  {yellow}[8]{reset} 🌐 Emerging Threat & Scam Radar (Live Web Grounding)",
+            f"  {yellow}[9]{reset} 🚪 Exit",
             f"{dim}{'-' * width}{reset}",
         ]
         return "\n".join(lines)
@@ -292,46 +299,845 @@ class IOManager:
         return self.collect_interaction_details()
 
     def collect_user_request(self) -> dict:
-        """Display main menu options (1-7) and return validated request dict."""
+        """Display main menu options 1-9 and return a validated request."""
         red = self._c("red")
         reset = self._c("reset")
 
         while True:
             self._print(self._render_menu())
-            choice = input("Select an option (1-7): > ").strip()
+            choice = input("Select an option (1-9): > ").strip()
 
-            while choice not in {"1", "2", "3", "4", "5", "6", "7"}:
-                self._print(f"  {red}❌ Invalid choice. Please enter a number between 1 and 7.{reset}")
-                choice = input("Select an option (1-7): > ").strip()
+            while choice not in {
+                "1", "2", "3", "4", "5", "6", "7", "8", "9"
+            }:
+                self._print(
+                    f"  {red}Invalid choice. "
+                    f"Please enter a number between 1 and 9.{reset}"
+                )
+                choice = input("Select an option (1-9): > ").strip()
 
-            self._print(f"{self._tag()} 🛠️  Option [{choice}] has been selected.")
+            self._print(
+                f"{self._tag()} Option [{choice}] has been selected."
+            )
 
             if choice == "1":
-                req = self._collect_text_request()
-                if req is not None:
-                    return req
+                request = self._collect_text_request()
+                if request is not None:
+                    return request
+
             elif choice == "2":
                 return self._collect_url_request()
+
             elif choice == "3":
-                req = self._collect_file_request()
-                if req is not None:
-                    return req
+                request = self._collect_file_request()
+                if request is not None:
+                    return request
+
             elif choice == "4":
-                res = self._handle_history_query()
-                if res is not None:
-                    return res
+                request = self.collect_batch_input_request()
+                if request is not None:
+                    return request
+
             elif choice == "5":
-                res = self._handle_trending_threats()
-                if res is not None:
-                    return res
+                return {"action": "previous_email_batches"}
+
             elif choice == "6":
-                return self._collect_radar_request()
+                request = self._handle_history_query()
+                if request is not None:
+                    return request
+
             elif choice == "7":
-                confirm = input("Are you sure you want to exit? (y/n): > ").strip().lower()
+                request = self._handle_trending_threats()
+                if request is not None:
+                    return request
+
+            elif choice == "8":
+                return self._collect_radar_request()
+
+            elif choice == "9":
+                confirm = input(
+                    "Are you sure you want to exit? (y/n): > "
+                ).strip().lower()
+
                 if confirm in ("y", "yes"):
                     return {"action": "exit"}
 
             self._print()
+
+    @staticmethod
+    def _batch_display_reference(batch: dict) -> str:
+        """Use the persistent database ID as the visible batch number."""
+        return f"BATCH-{batch['batch_id']:04d}"
+
+    @staticmethod
+    def _batch_display_timestamp(value: str) -> str:
+        """Format an aware stored timestamp in Singapore time."""
+        try:
+            timestamp = datetime.fromisoformat(
+                value.replace("Z", "+00:00")
+            )
+
+            if timestamp.tzinfo is None:
+                return "Unavailable: timestamp has no timezone"
+
+            singapore_time = timestamp.astimezone(
+                timezone(timedelta(hours=8))
+            )
+
+            return singapore_time.strftime(
+                "%d %b %Y, %I:%M %p"
+            ) + " SGT"
+
+        except (TypeError, ValueError, AttributeError):
+            return "Unavailable"
+
+    def _display_batch_table(
+        self,
+        headings: list[str],
+        rows: list[list],
+        widths: list[int],
+    ) -> None:
+        """Display aligned columns and shorten long cells."""
+        separator = "-+-".join("-" * width for width in widths)
+
+        for index, row in enumerate([headings] + rows):
+            cells = []
+
+            for value, width in zip(row, widths):
+                text = " ".join(str(value).split())
+
+                if len(text) > width:
+                    text = text[:width - 3] + "..."
+
+                cells.append(text.ljust(width))
+
+            self._print(" | ".join(cells))
+
+            if index == 0:
+                self._print(separator)
+
+    def display_email_batch_summary(
+        self,
+        batch: dict,
+        emails: Optional[list[dict]] = None,
+    ) -> None:
+        """Display saved batch totals and email results."""
+        self._print()
+        self._print("=" * 96)
+        self._print("BATCH SUMMARY".center(96))
+        self._print("=" * 96)
+
+        status = batch["processing_status"].replace("_", " ").title()
+
+        self._display_batch_table(
+            ["Batch Reference", "Created (Singapore)", "Status"],
+            [[
+                self._batch_display_reference(batch),
+                self._batch_display_timestamp(batch["created_at"]),
+                status,
+            ]],
+            [16, 30, 20],
+        )
+
+        self._print()
+        self._print("IMPORT SUMMARY")
+
+        self._display_batch_table(
+            ["Total Files", "Accepted Emails", "Duplicates", "Failed Imports"],
+            [[
+                batch["total_files"],
+                batch["accepted_count"],
+                batch["duplicate_count"],
+                batch["import_failed_count"],
+            ]],
+            [12, 16, 12, 15],
+        )
+
+        self._print()
+        self._print("ANALYSIS SUMMARY")
+
+        self._display_batch_table(
+            [
+                "Total Emails",
+                "Analysed",
+                "Failed",
+                "Unfinished",
+                "High",
+                "Medium",
+                "Low",
+            ],
+            [[
+                batch["accepted_count"],
+                batch["completed_count"],
+                batch["analysis_failed_count"],
+                (
+                    batch["accepted_count"]
+                    - batch["completed_count"]
+                    - batch["analysis_failed_count"]
+                ),
+                batch["high_risk_count"],
+                batch["medium_risk_count"],
+                batch["low_risk_count"],
+            ]],
+            [12, 10, 8, 12, 6, 8, 6],
+        )
+
+        if emails is not None:
+            self._print()
+            self._print("EMAIL RESULTS")
+            self.display_batch_email_rows(emails)
+
+        self._print()
+        self._print("Total Emails = accepted emails.")
+        self._print("Failed = analysis failures; import failures are separate.")
+        self._print("Unfinished = accepted emails not completed or failed.")
+
+    def display_batch_email_rows(self, emails: list[dict]) -> None:
+        """Display saved email metadata and classification."""
+        if not emails:
+            self._print("No matching emails are available.")
+            return
+
+        rows = []
+
+        for email in emails:
+            status = email["processing_status"]
+
+            if status == "completed":
+                risk = (email.get("overall_risk") or "unknown").upper()
+            else:
+                # Read the saved domain result for presentation; ownership and
+                # classification remain outside this UI.
+                risk = "UNASSESSED"
+
+            filename = PureWindowsPath(
+                email.get("source_path") or ""
+            ).name
+
+            rows.append([
+                email.get("item_id") or "Unavailable",
+                filename or "Unavailable",
+                risk,
+                status.replace("_", " ").title(),
+                email.get("subject") or "(No subject)",
+            ])
+
+        self._display_batch_table(
+            ["Email Reference", "Filename", "Risk", "Status", "Subject"],
+            rows,
+            [15, 20, 10, 12, 26],
+        )
+
+    def select_previous_email_batch(
+        self,
+        batches: list[dict],
+    ) -> Optional[str]:
+        """Select a batch using its persistent number or display reference."""
+        if not batches:
+            self._print("No previous email batches are available.")
+            return None
+
+        self._print()
+        self._print("=" * 100)
+        self._print("PREVIOUS BATCH RECORDS".center(100))
+        self._print("=" * 100)
+
+        rows = []
+
+        for batch in batches:
+            rows.append([
+                self._batch_display_reference(batch),
+                self._batch_display_timestamp(batch["created_at"]),
+                batch["accepted_count"],
+                batch["high_risk_count"],
+                batch["medium_risk_count"],
+                batch["low_risk_count"],
+                batch["analysis_failed_count"],
+            ])
+
+        self._display_batch_table(
+            [
+                "Batch",
+                "Created (Singapore)",
+                "Emails",
+                "High",
+                "Medium",
+                "Low",
+                "Failed",
+            ],
+            rows,
+            [14, 30, 7, 6, 8, 6, 7],
+        )
+
+        self._print()
+        self._print("Emails = accepted emails; Failed = analysis failures.")
+        self._print("Enter a batch number or reference, such as 1 or BATCH-0001.")
+        self._print("Enter 0 to return to the main menu.")
+
+        while True:
+            choice = input("Select batch: > ").strip().upper()
+
+            if choice == "0":
+                return None
+
+            for batch in batches:
+                reference = self._batch_display_reference(batch)
+
+                if choice == reference:
+                    return batch["batch_reference"]
+
+                if choice.isdecimal():
+                    if int(choice) == batch["batch_id"]:
+                        return batch["batch_reference"]
+
+            self._print("That batch is unavailable.")
+
+    def collect_batch_review_request(self) -> dict:
+        """Collect an action for the currently selected batch."""
+        while True:
+            self._print()
+            self._print("BATCH OPTIONS")
+            self._print("1. View All Emails")
+            self._print("2. Search Emails")
+            self._print("3. View High Risk Emails")
+            self._print("4. Download Batch Report (.docx)")
+            self._print("0. Back")
+
+            choice = input("Select an option: > ").strip()
+
+            if choice in {"0", "1", "3", "4"}:
+                return {"choice": choice}
+
+            if choice == "2":
+                mode = input(
+                    "Search by 1. Email reference or 2. Keyword "
+                    "(0 to cancel): > "
+                ).strip()
+
+                if mode == "0":
+                    continue
+
+                if mode not in {"1", "2"}:
+                    self._print("Select 1 or 2.")
+                    continue
+
+                query = input("Enter search value: > ").strip()
+
+                if not query:
+                    self._print("Search value cannot be empty.")
+                    continue
+
+                return {
+                    "choice": "2",
+                    "mode": mode,
+                    "query": query,
+                }
+
+            self._print("Enter an option from 0 to 4.")
+
+    def _email_heading(self, title: str) -> None:
+        """Display a consistent heading for email screens."""
+        self._print()
+        self._print("=" * 72)
+        self._print(title.center(72))
+        self._print("=" * 72)
+
+    def _email_section(self, title: str, content) -> None:
+        """Display saved text or numbered text items."""
+        self._print()
+        self._print(title)
+        self._print("-" * 72)
+
+        if isinstance(content, str):
+            items = [content]
+            numbered = False
+        elif isinstance(content, list):
+            items = content
+            numbered = True
+        else:
+            items = []
+            numbered = False
+
+        displayed = False
+
+        for number, item in enumerate(items, start=1):
+            if not isinstance(item, str) or not item.strip():
+                continue
+
+            prefix = f"{number}. " if numbered else ""
+
+            lines = wrap(
+                item.strip(),
+                width=72,
+                initial_indent=prefix,
+                subsequent_indent=" " * len(prefix),
+            )
+
+            for line in lines:
+                self._print(line)
+
+            displayed = True
+
+        if not displayed:
+            self._print("Information is unavailable for this record.")
+
+    def _collect_email_choice(self, options: set[str]) -> str:
+        """Collect a valid submenu choice."""
+        while True:
+            choice = input("Select an option: > ").strip()
+
+            if choice in options:
+                return choice
+
+            self._print("Select one of the displayed options.")
+
+    def select_batch_email(
+        self,
+        emails: list[dict],
+    ) -> Optional[str]:
+        """Select an email using its reference or reference number."""
+        if not emails:
+            return None
+
+        self._print()
+        self._print(
+            "Enter an email number or reference, "
+            "such as 1 or EMAIL-001."
+        )
+        self._print("Enter 0 to return to Batch Options.")
+
+        while True:
+            choice = input("Select email: > ").strip().upper()
+
+            if choice == "0":
+                return None
+
+            for email in emails:
+                reference = email.get("item_id") or ""
+
+                if not reference:
+                    continue
+
+                if choice == reference.upper():
+                    return reference
+
+                prefix, separator, number = reference.upper().partition(
+                    "-"
+                )
+
+                if (
+                    choice.isdecimal()
+                    and prefix == "EMAIL"
+                    and separator
+                    and number.isdecimal()
+                ):
+                    if int(choice) == int(number):
+                        return reference
+
+            self._print(
+                "Select an email number or reference "
+                "from the displayed list."
+            )
+
+    def review_batch_email(self, details: dict) -> None:
+        """Display one saved email and its educational submenus."""
+        submission = details["submission"]
+        metadata = details["metadata"]
+        education = details["education"]
+        assessment = submission.assessment
+
+        risk = "UNASSESSED"
+
+        if (
+            submission.processing_status == "completed"
+            and assessment is not None
+        ):
+            risk = assessment.overall_risk.upper()
+
+        while True:
+            self._email_heading("INDIVIDUAL EMAIL DETAILS")
+
+            self._print(
+                f"Email Reference: {metadata['item_id']}"
+            )
+            self._print(
+                f"Subject:         "
+                f"{metadata.get('subject') or '(No subject)'}"
+            )
+            self._print(
+                f"Sender:          "
+                f"{metadata.get('sender') or 'Unavailable'}"
+            )
+            self._print(f"Risk Level:      {risk}")
+            self._print(
+                f"Analysis Status: "
+                f"{submission.processing_status.replace('_', ' ').title()}"
+            )
+
+            explanations = education.get("threat_explanations", [])
+            threat_types = []
+
+            if isinstance(explanations, list):
+                for explanation in explanations:
+                    if isinstance(explanation, dict):
+                        threat_type = explanation.get("threat_type")
+
+                        if isinstance(threat_type, str):
+                            if threat_type.strip():
+                                if threat_type not in threat_types:
+                                    threat_types.append(threat_type)
+
+            self._print(
+                f"Threat Type:     "
+                f"{', '.join(threat_types) or 'Unavailable'}"
+            )
+            self._print("User Exposure:   Unknown")
+            self._print(
+                "Importing this email does not confirm recipient actions."
+            )
+
+            summary = education.get("threat_summary")
+
+            if not summary and assessment is not None:
+                summary = assessment.threat_summary
+
+            self._email_section("ANALYSIS SUMMARY", summary)
+
+            warnings = []
+
+            for evidence in submission.evidences:
+                excerpt = evidence.evidence_excerpt
+
+                if isinstance(excerpt, str) and excerpt.strip():
+                    if excerpt not in warnings:
+                        warnings.append(excerpt)
+
+            self._email_section(
+                "DETECTED WARNING SIGNS",
+                warnings,
+            )
+
+            if submission.processing_status != "completed":
+                self._email_section(
+                    "ANALYSIS NOTICE",
+                    submission.error_message
+                    or "A completed assessment is unavailable.",
+                )
+
+            self._print()
+            self._print("EMAIL OPTIONS")
+            self._print("1. View Original Email Content")
+            self._print("2. Educational Analysis")
+            self._print("0. Back to Previous List")
+
+            choice = self._collect_email_choice({"0", "1", "2"})
+
+            if choice == "0":
+                return
+
+            if choice == "1":
+                self._display_saved_email_content(submission, metadata)
+
+            elif choice == "2":
+                self._review_email_education(
+                    metadata,
+                    education,
+                    risk,
+                    warnings,
+                )
+
+    def _display_saved_email_content(
+        self,
+        submission: Submission,
+        metadata: dict,
+    ) -> None:
+        """Display the saved parsed content without reading source files."""
+        self._email_heading("ORIGINAL EMAIL CONTENT")
+        self._print(f"Email Reference: {metadata['item_id']}")
+        self._print(
+            "Showing saved parsed content; original MIME formatting "
+            "is not retained."
+        )
+
+        try:
+            content = json.loads(submission.input_value)
+        except (TypeError, ValueError):
+            content = None
+
+        if isinstance(content, dict):
+            self._email_section("Subject", content.get("subject"))
+            self._email_section("Sender", content.get("sender"))
+            self._email_section("Reply-To", content.get("reply_to"))
+            self._email_section("Recipients", content.get("recipients"))
+            self._email_section("Email Body", content.get("body_text"))
+            self._email_section(
+                "Extracted URLs",
+                content.get("extracted_urls"),
+            )
+        else:
+            self._email_section("Email Content", submission.input_value)
+
+        input("\nPress Enter to return to Email Details...")
+
+    def _review_email_education(
+        self,
+        metadata: dict,
+        education: dict,
+        risk: str,
+        warnings: list[str],
+    ) -> None:
+        """Offer saved threat explanations and conditional guidance."""
+        while True:
+            self._email_heading("EDUCATIONAL ANALYSIS")
+            self._print(f"Email Reference: {metadata['item_id']}")
+            self._print(
+                f"Subject: {metadata.get('subject') or '(No subject)'}"
+            )
+            self._print(f"Risk Level: {risk}")
+
+            self._print()
+            self._print("1. Explain the Threat")
+            self._print("2. Preventive or Mitigation Steps")
+            self._print("0. Back to Email Details")
+
+            choice = self._collect_email_choice({"0", "1", "2"})
+
+            if choice == "0":
+                return
+
+            if choice == "1":
+                self._display_saved_threat_explanation(
+                    education,
+                    warnings,
+                )
+            else:
+                self._review_saved_action_guidance(
+                    metadata,
+                    education,
+                )
+
+    def _display_saved_threat_explanation(
+        self,
+        education: dict,
+        warnings: list[str],
+    ) -> None:
+        """Explain threats using saved AI education and evidence."""
+        self._email_heading("EXPLAIN THE THREAT")
+
+        explanations = education.get("threat_explanations", [])
+
+        if isinstance(explanations, list):
+            for explanation in explanations:
+                if not isinstance(explanation, dict):
+                    continue
+
+                self._email_section(
+                    "Threat Type",
+                    explanation.get("threat_type"),
+                )
+                self._email_section(
+                    "What This Means",
+                    explanation.get("meaning"),
+                )
+                self._email_section(
+                    "Typical Goal",
+                    explanation.get("typical_goal"),
+                )
+                self._email_section(
+                    "Supporting Email Evidence",
+                    explanation.get("evidence"),
+                )
+
+        self._email_section(
+            "Overview",
+            education.get("what_it_is"),
+        )
+        self._email_section("Why This Email Was Flagged", warnings)
+        self._email_section(
+            "Possible Consequences",
+            education.get("why_dangerous"),
+        )
+        self._email_section(
+            "Analysis Limitations",
+            education.get("limitations"),
+        )
+
+        input("\nPress Enter to return to Educational Analysis...")
+
+    def _review_saved_action_guidance(
+        self,
+        metadata: dict,
+        education: dict,
+    ) -> None:
+        """Show conditional guidance without recording an actual action."""
+        actions = [
+            (
+                "viewed_only",
+                "Only Viewed the Email / No Further Action",
+            ),
+            (
+                "clicked_link",
+                "Clicked a Link",
+            ),
+            (
+                "entered_information",
+                "Entered Information or Shared an OTP",
+            ),
+            (
+                "opened_or_downloaded_file",
+                "Downloaded or Opened an Attachment",
+            ),
+            (
+                "made_payment_or_shared_banking_details",
+                "Made a Payment or Shared Banking Details",
+            ),
+        ]
+
+        while True:
+            self._email_heading("PREVENTIVE OR MITIGATION STEPS")
+            self._print("Select the situation to view guidance for:")
+            self._print(
+                "This selection does not update recorded user exposure."
+            )
+            self._print()
+
+            for number, action in enumerate(actions, start=1):
+                self._print(f"{number}. {action[1]}")
+
+            self._print("0. Back to Educational Analysis")
+
+            choice = self._collect_email_choice(
+                {"0", "1", "2", "3", "4", "5"}
+            )
+
+            if choice == "0":
+                return
+
+            # Select existing AI guidance for a hypothetical situation.
+            # Browsing does not make another AI call or record an action.
+            action_key, action_label = actions[int(choice) - 1]
+            scenarios = education.get("recovery_by_action", {})
+            steps = None
+
+            if isinstance(scenarios, dict):
+                scenario = scenarios.get(action_key)
+
+                if isinstance(scenario, dict):
+                    steps = scenario.get("steps")
+
+            self._email_heading("SELECTED GUIDANCE")
+            self._print(f"Email Reference: {metadata['item_id']}")
+            self._print(f"Selected Situation: {action_label}")
+
+            self._email_section(
+                "GENERAL PREVENTIVE STEPS",
+                education.get("preventive_steps"),
+            )
+
+            if (
+                isinstance(steps, list)
+                and steps
+                and all(
+                    isinstance(step, str) and step.strip()
+                    for step in steps
+                )
+            ):
+                self._email_section("RECOMMENDED STEPS", steps)
+            else:
+                self._print()
+                self._print(
+                    "Action-specific guidance is unavailable "
+                    "for this record."
+                )
+
+            self._print()
+            self._print("1. Choose Another Situation")
+            self._print("0. Back to Educational Analysis")
+
+            next_choice = self._collect_email_choice({"0", "1"})
+
+            if next_choice == "0":
+                return
+            
+    def collect_batch_input_request(self) -> Optional[dict]:
+        """Collect email paths without parsing or analysing files."""
+        while True:
+            self._print()
+            self._print("=" * self._banner_width)
+            self._print("BATCH EMAIL INPUT")
+            self._print("=" * self._banner_width)
+            self._print("1. Import multiple .eml files")
+            self._print("2. Import a folder containing .eml files")
+            self._print("0. Back to Main Menu")
+
+            choice = input("Select an option: > ").strip()
+
+            if choice == "0":
+                return None
+
+            if choice not in {"1", "2"}:
+                self._print("Invalid choice. Enter 1, 2 or 0.")
+                continue
+
+            paths = []
+
+            if choice == "1":
+                self._print(
+                    "Enter one file path at a time, without surrounding quotes."
+                )
+                self._print(
+                    "Enter DONE to finish, or BACK to cancel."
+                )
+
+                while True:
+                    path = input("Email file path: > ").strip()
+
+                    if path.upper() == "BACK":
+                        return None
+
+                    if path.upper() == "DONE":
+                        if paths:
+                            break
+
+                        self._print(
+                            "Enter at least one file path first."
+                        )
+                        continue
+
+                    path = path.strip('"')
+
+                    if not path:
+                        self._print("The file path cannot be empty.")
+                        continue
+
+                    if not path.lower().endswith(".eml"):
+                        self._print("Select a file ending in .eml.")
+                        continue
+
+                    paths.append(path)
+
+            else:
+                while True:
+                    path = input(
+                        "Folder path, or BACK to cancel: > "
+                    ).strip()
+
+                    if path.upper() == "BACK":
+                        return None
+
+                    path = path.strip('"')
+
+                    if not path:
+                        self._print("The folder path cannot be empty.")
+                        continue
+
+                    paths.append(path)
+                    break
+
+            return {
+                "action": "batch_email_analysis",
+                "paths": paths,
+            }
 
     def _collect_text_request(self) -> Optional[dict]:
         """Collect and validate raw text or email submission."""
@@ -476,7 +1282,7 @@ class IOManager:
 
         self._print("\n🗄️  -- Query Historical Incident Database --")
         self._print("  [1] Search by keyword")
-        self._print("  [2] Filter by risk level (Low / Moderate / High)")
+        self._print("  [2] Filter by risk level (Low / Medium / High)")
         self._print("  [3] Back to main menu")
 
         while True:
@@ -504,8 +1310,8 @@ class IOManager:
                 self._print(f"  {yellow}⚠️  No records found for '{keyword}'.{reset}")
 
         elif sub_choice == "2":
-            levels = {"1": "low", "2": "moderate", "3": "high"}
-            self._print("  [1] Low  [2] Moderate  [3] High")
+            levels = {"1": "low", "2": "medium", "3": "high"}
+            self._print("  [1] Low  [2] Medium  [3] High")
 
             while True:
                 lvl_choice = input("Select risk level (1-3): > ").strip()
@@ -518,10 +1324,9 @@ class IOManager:
 
             if self._data_manager is not None:
                 if hasattr(self._data_manager, "get_records_by_risk_level"):
-                    try:
-                        results = self._data_manager.get_records_by_risk_level(self._db_path, selected_level)
-                    except TypeError:
-                        results = self._data_manager.get_records_by_risk_level(selected_level)
+                    results = self._data_manager.get_records_by_risk_level(
+                        selected_level,
+                    )
                 elif hasattr(self._data_manager, "query_by_risk"):
                     results = self._data_manager.query_by_risk(selected_level)
                 elif hasattr(self._data_manager, "search_records"):
@@ -887,7 +1692,8 @@ class IOManager:
         if not records:
             return None
 
-        # Check whether interactive curses terminal is supported
+        # Prefer interactive navigation when supported; otherwise use
+        # numbered input so the same records remain accessible.
         if sys.stdin.isatty() and sys.stdout.isatty():
             try:
                 return self._browse_curses(records, title="HISTORICAL INCIDENT RESULTS")
