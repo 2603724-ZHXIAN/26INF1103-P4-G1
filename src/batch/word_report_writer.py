@@ -18,6 +18,8 @@ class WordReportWriter:
         )
 
         summary = report.generate_summary()
+
+        self._add_executive_summary(document, summary)
         self._add_summary_section(document, summary)
 
        
@@ -29,6 +31,8 @@ class WordReportWriter:
 
         # Ranked Email Results
         self._add_ranked_section(document, report)
+
+        self._add_all_emails_section(document, report)
 
         # Campaign Grouping
         self._add_campaign_section(document, report)
@@ -166,28 +170,70 @@ class WordReportWriter:
     def _add_ranked_section(
         self, document, report: BatchReport
     ) -> None:
-        """Add ranked email results to the Word document."""
+        """Display detailed high-risk email findings."""
 
         document.add_heading("Prioritised High-Risk Emails", level=1)
 
         ranked_results = report.get_high_risk_results()
+        total_high_risk = len(ranked_results)
+        ranked_results = ranked_results[:10]
+        remaining_count = total_high_risk - len(ranked_results)
 
-        if ranked_results:
-            ranked_table = document.add_table(rows=1, cols=3)
-            ranked_table.style = "Table Grid"
-
-            header = ranked_table.rows[0].cells
-            header[0].text = "Submission ID"
-            header[1].text = "Risk Level"
-            header[2].text = "Risk Score"
-
-            for result in ranked_results:
-                cells = ranked_table.add_row().cells
-                cells[0].text = str(result["submission_id"])
-                cells[1].text = str(result["overall_risk"]).title()
-                cells[2].text = str(result["risk_score"])
-        else:
+        if not ranked_results:
             document.add_paragraph("No high-risk emails identified.")
+            return
+
+        for result in ranked_results:
+            submission_id = result.get("submission_id")
+            risk_level = result.get("overall_risk") or "Unknown"
+            risk_score = result.get("risk_score")
+            threat_type = result.get("primary_threat_type")
+            threat_summary = result.get("threat_summary")
+            recommended_action = result.get("recommended_action")
+            risk_reasons = result.get("risk_reasons") or []
+
+            document.add_heading(
+                f"Submission #{submission_id}",
+                level=2
+            )
+
+            document.add_paragraph(
+                f"Risk Level: {str(risk_level).title()}"
+            )
+
+            document.add_paragraph(
+                f"Risk Score: {risk_score}/100"
+            )
+
+            if threat_type:
+                document.add_paragraph(
+                    f"Threat Type: {str(threat_type).title()}"
+                )
+
+            if threat_summary:
+                document.add_paragraph(
+                    f"Threat Summary: {threat_summary}"
+                )
+
+            if isinstance(risk_reasons, list) and risk_reasons:
+                document.add_paragraph("Why This Email Is Risky:")
+
+                for reason in risk_reasons:
+                    document.add_paragraph(
+                        str(reason),
+                        style="List Bullet"
+                    )
+
+            if recommended_action:
+                document.add_paragraph(
+                    f"Recommended Action: {recommended_action}"
+                )
+
+        if remaining_count > 0:
+            document.add_paragraph(
+                f"Plus {remaining_count} more high-risk emails. "
+                "See the All-Email Summary table for their details."
+            )
 
     def _add_failed_section(
         self, document, report: BatchReport
@@ -301,3 +347,91 @@ class WordReportWriter:
 
         for item in limitations:
             document.add_paragraph(item, style="List Bullet")
+
+    def _add_executive_summary(
+        self, document, summary: dict
+    ) -> None:
+        """Add a concise overview of the batch findings."""
+
+        total = summary["total_emails"]
+        completed = summary["completed"]
+        failed = summary["failed"]
+        high_risk = summary["high_risk"]
+
+        document.add_heading("Executive Summary", level=1)
+
+        if total == 0:
+            message = "No emails were submitted for analysis."
+
+        elif completed == 0 and failed > 0:
+            message = (
+                f"{total} emails were submitted, but none were "
+                f"successfully analysed. {failed} analyses failed. "
+                "The batch results are incomplete and require attention."
+            )
+
+        else:
+            message = (
+                f"{total} emails submitted: {completed} successfully "
+                f"analysed, {failed} failed. "
+                f"{high_risk} high-risk emails require attention."
+            )
+
+        document.add_paragraph(message)
+
+    def _add_all_emails_section(
+        self, document, report: BatchReport
+    ) -> None:
+        """Display all batch emails in a compact summary table."""
+
+        document.add_heading("All-Email Summary", level=1)
+
+        ranked_results = report.get_ranked_results()
+        ranked_ids = {
+            result.get("submission_id")
+            for result in ranked_results
+        }
+
+        remaining_records = [
+            record
+            for record in report.email_records
+            if record.get("submission_id") not in ranked_ids
+        ]
+
+        all_records = ranked_results + remaining_records
+
+        if not all_records:
+            document.add_paragraph("No emails available.")
+            return
+
+        table = document.add_table(rows=1, cols=4)
+        table.style = "Table Grid"
+
+        headers = [
+            "Email ID",
+            "Risk Level",
+            "Score",
+            "Threat Type",
+        ]
+
+        for index, heading in enumerate(headers):
+            table.rows[0].cells[index].text = heading
+
+        for record in all_records:
+            row = table.add_row().cells
+
+            status = record.get("processing_status")
+            risk = record.get("overall_risk")
+            score = record.get("risk_score")
+            threat = record.get("primary_threat_type")
+
+            row[0].text = str(record.get("submission_id", "—"))
+
+            if status == "failed":
+                row[1].text = "Failed"
+                row[2].text = "—"
+                row[3].text = "—"
+            else:
+                row[1].text = str(risk).title() if risk else "Unknown"
+                row[2].text = str(score) if score is not None else "—"
+                row[3].text = str(threat).title() if threat else "—"

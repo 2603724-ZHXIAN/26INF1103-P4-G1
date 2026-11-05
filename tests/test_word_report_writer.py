@@ -115,15 +115,19 @@ class TestWordReportWriter(unittest.TestCase):
         text = self._document_text(document)
 
         self.assertIn("Prioritised High-Risk Emails", text)
-        self.assertIn("95", text)
-        self.assertNotIn("55", text)
 
-        ranked_table = document.tables[2]
+        # Verify the high-risk submission is displayed.
+        self.assertIn("Submission #101", text)
+        self.assertIn("Risk Level: High", text)
+        self.assertIn("Risk Score: 95/100", text)
 
-        self.assertEqual(len(ranked_table.rows), 2)
-        self.assertEqual(ranked_table.rows[1].cells[0].text, "101")
-        self.assertEqual(ranked_table.rows[1].cells[1].text, "High")
-        self.assertEqual(ranked_table.rows[1].cells[2].text, "95")
+        # Verify additional information is displayed.
+        self.assertIn("Threat Type: Phishing", text)
+        self.assertIn("Bank impersonation attempt.", text)
+
+        # Medium-risk submissions should not appear in
+        # the detailed high-risk section.
+        self.assertNotIn("Risk Score: 55/100", text)
 
     def test_campaign_grouping(self):
         document = self._generate_document()
@@ -201,6 +205,111 @@ class TestWordReportWriter(unittest.TestCase):
         self.assertIn("No campaign groups available.", text)
         self.assertIn("No failed email analyses.", text)
         self.assertIn("No educational guidance available.", text)
+
+    def test_large_batch_100_emails(self):
+        """Verify that 100 emails are represented without excessive detail."""
+
+        records = []
+
+        # Create 25 high-risk emails.
+        for i in range(25):
+            records.append({
+                "submission_id": 1001 + i,
+                "processing_status": "completed",
+                "input_value": f"Urgent bank verification request {i}",
+                "overall_risk": "high",
+                "risk_score": 100 - i,
+                "primary_threat_type": "phishing",
+            })
+
+        # Create 69 medium/low-risk emails.
+        for i in range(69):
+            records.append({
+                "submission_id": 1026 + i,
+                "processing_status": "completed",
+                "input_value": f"Email content {i}",
+                "overall_risk": "medium" if i < 30 else "low",
+                "risk_score": 60 - (i % 30),
+                "primary_threat_type": "spam",
+            })
+
+        # Create 6 failed emails.
+        for i in range(6):
+            records.append({
+                "submission_id": 1095 + i,
+                "processing_status": "failed",
+                "input_value": f"Failed email {i}",
+                "error_message": "AI provider timeout",
+            })
+
+        batch_info = {
+            "batch_reference": "BATCH-LARGE-001",
+            "saved_email_count": 100,
+            "completed_count": 94,
+            "analysis_failed_count": 6,
+            "high_risk_count": 25,
+            "medium_risk_count": 30,
+            "low_risk_count": 39,
+        }
+
+        report = BatchReport(batch_info, records)
+        self.writer.export(report, self.output_path)
+
+        self.writer.export(
+            report,
+            "reports/batch_100_email_preview.docx"
+        )
+
+        document = Document(self.output_path)
+        text = self._document_text(document)
+
+        # Check executive summary.
+        self.assertIn("100 emails submitted", text)
+        self.assertIn("94 successfully analysed", text)
+
+        # Check top-10 limit.
+        self.assertEqual(
+            sum(
+                1 for paragraph in document.paragraphs
+                if paragraph.text.startswith("Submission #")
+            ),
+            10,
+        )
+
+        self.assertIn("Plus 15 more high-risk emails", text)
+
+        # Find the all-email table by its header.
+        matching_tables = [
+            table for table in document.tables
+            if table.rows
+            and table.rows[0].cells[0].text == "Email ID"
+            and table.rows[0].cells[1].text == "Risk Level"
+        ]
+
+        self.assertEqual(len(matching_tables), 1)
+
+        all_email_table = matching_tables[0]
+
+        # 100 emails + 1 header row.
+        self.assertEqual(len(all_email_table.rows), 101)
+
+        ids = [
+            row.cells[0].text
+            for row in all_email_table.rows[1:]
+        ]
+
+        self.assertEqual(len(set(ids)), 100)
+
+        # Highest-risk email comes first.
+        self.assertEqual(ids[0], "1001")
+
+        # Failed emails are still included.
+        failed_rows = [
+            row for row in all_email_table.rows[1:]
+            if row.cells[1].text == "Failed"
+        ]
+
+        self.assertEqual(len(failed_rows), 6)
 
 
 if __name__ == "__main__":

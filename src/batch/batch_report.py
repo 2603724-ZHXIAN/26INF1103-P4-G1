@@ -114,6 +114,10 @@ class BatchReport:
                 "submission_id": record.get("submission_id"),
                 "overall_risk": record.get("overall_risk"),
                 "risk_score": score,
+                "primary_threat_type": record.get("primary_threat_type"),
+                "threat_summary": record.get("threat_summary"),
+                "recommended_action": record.get("recommended_action"),
+                "risk_reasons": record.get("risk_reasons") or [],
             })
 
         ranked_records.sort(
