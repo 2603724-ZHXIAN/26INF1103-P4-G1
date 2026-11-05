@@ -129,7 +129,7 @@ class WordReportWriter:
     def _add_campaign_section(
         self, document, report: BatchReport
     ) -> None:
-        """Add similar email groups to the Word document."""
+        """Display potential scam campaigns in a compact table."""
 
         document.add_heading("Potential Scam Campaigns", level=1)
 
@@ -139,33 +139,50 @@ class WordReportWriter:
             if group["count"] >= 2
         ]
 
-        if campaign_groups:
-            for index, group in enumerate(campaign_groups, start=1):
-                document.add_heading(f"Campaign Group {index}", level=2)
-
-                document.add_paragraph(
-                    f"Number of Emails: {group['count']}"
-                )
-
-                document.add_paragraph(
-                    "Submission IDs: "
-                    + ", ".join(str(id) for id in group["submission_ids"])
-                )
-
-                patterns = report.get_campaign_patterns(group)
-
-                if patterns["common_threat_types"]:
-                    document.add_paragraph("Common Threat Types:")
-
-                    for threat in patterns["common_threat_types"]:
-                        document.add_paragraph(
-                            f"{threat['threat_type'].title()}: {threat['count']}",
-                            style="List Bullet"
-                        )
-                else:
-                    document.add_paragraph("No common threat types identified.")
-        else:
+        if not campaign_groups:
             document.add_paragraph("No campaign groups available.")
+            return
+
+        table = document.add_table(rows=1, cols=4)
+        table.style = "Table Grid"
+
+        headers = [
+            "Campaign",
+            "Emails",
+            "Submission IDs",
+            "Common Threat",
+        ]
+
+        for index, heading in enumerate(headers):
+            table.rows[0].cells[index].text = heading
+
+        for index, group in enumerate(campaign_groups, start=1):
+            cells = table.add_row().cells
+
+            cells[0].text = f"Group {index}"
+            cells[1].text = str(group["count"])
+
+            submission_ids = group["submission_ids"]
+            visible_ids = submission_ids[:3]
+            remaining = len(submission_ids) - len(visible_ids)
+
+            id_text = ", ".join(str(item) for item in visible_ids)
+
+            if remaining > 0:
+                id_text += f" +{remaining} more"
+
+            cells[2].text = id_text
+
+            patterns = report.get_campaign_patterns(group)
+            common_threats = patterns["common_threat_types"]
+
+            if common_threats:
+                cells[3].text = ", ".join(
+                    str(threat["threat_type"]).title()
+                    for threat in common_threats
+                )
+            else:
+                cells[3].text = "Unknown"
 
     def _add_ranked_section(
         self, document, report: BatchReport
@@ -265,14 +282,15 @@ class WordReportWriter:
         else:
             document.add_paragraph("No failed email analyses.")
 
+
     def _add_guidance_section(
         self, document, report: BatchReport
     ) -> None:
-        """Add AI-generated educational guidance to the Word document."""
+        """Group AI educational guidance by threat type."""
 
         document.add_heading("AI Educational Guidance", level=1)
 
-        guidance_found = False
+        grouped_guidance = {}
 
         for record in report.email_records:
             if record.get("processing_status") != "completed":
@@ -285,38 +303,76 @@ class WordReportWriter:
             if not threat_summary and not preventive_steps and not recovery_steps:
                 continue
 
-            guidance_found = True
+            threat_type = record.get("primary_threat_type") or "Unknown"
+            threat_type = str(threat_type).strip().lower() or "unknown"
+
+            if threat_type not in grouped_guidance:
+                grouped_guidance[threat_type] = {
+                    "submission_ids": [],
+                    "summaries": [],
+                    "preventive_steps": [],
+                    "recovery_steps": [],
+                }
+
+            group = grouped_guidance[threat_type]
+            group["submission_ids"].append(record.get("submission_id"))
+
+            if threat_summary and threat_summary not in group["summaries"]:
+                group["summaries"].append(threat_summary)
+
+            for field, steps in (
+                ("preventive_steps", preventive_steps),
+                ("recovery_steps", recovery_steps),
+            ):
+                if not isinstance(steps, list):
+                    continue
+
+                for step in steps:
+                    step_text = str(step).strip()
+
+                    if step_text and step_text not in group[field]:
+                        group[field].append(step_text)
+
+        if not grouped_guidance:
+            document.add_paragraph("No educational guidance available.")
+            return
+
+        for threat_type, group in grouped_guidance.items():
+            count = len(group["submission_ids"])
 
             document.add_heading(
-                f"Submission {record.get('submission_id')}",
-                level=2
+                f"{threat_type.title()} — {count} emails",
+                level=2,
             )
 
-            if threat_summary:
-                document.add_paragraph(
-                    f"Threat Summary: {threat_summary}"
-                )
+            ids = group["submission_ids"]
+            visible_ids = ids[:5]
+            remaining = len(ids) - len(visible_ids)
 
-            if isinstance(preventive_steps, list) and preventive_steps:
-                document.add_paragraph("Preventive Steps:")
+            id_text = ", ".join(str(item) for item in visible_ids)
 
-                for step in preventive_steps:
+            if remaining > 0:
+                id_text += f" +{remaining} more"
+
+            document.add_paragraph(f"Submissions: {id_text}")
+
+            sections = [
+                ("Threat Summaries", group["summaries"]),
+                ("Preventive Steps", group["preventive_steps"]),
+                ("Recovery Steps", group["recovery_steps"]),
+            ]
+
+            for heading, items in sections:
+                if not items:
+                    continue
+
+                document.add_paragraph(heading + ":")
+
+                for item in items:
                     document.add_paragraph(
-                        str(step),
-                        style="List Bullet"
+                        str(item),
+                        style="List Bullet",
                     )
-
-            if isinstance(recovery_steps, list) and recovery_steps:
-                document.add_paragraph("Recovery Steps:")
-
-                for step in recovery_steps:
-                    document.add_paragraph(
-                        str(step),
-                        style="List Bullet"
-                    )
-
-        if not guidance_found:
-            document.add_paragraph("No educational guidance available.")
 
     def _add_methodology_section(self, document) -> None:
         """Explain the report methodology and its limitations."""

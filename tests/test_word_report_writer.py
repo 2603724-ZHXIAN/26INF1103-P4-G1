@@ -131,12 +131,26 @@ class TestWordReportWriter(unittest.TestCase):
 
     def test_campaign_grouping(self):
         document = self._generate_document()
-        text = self._document_text(document)
 
-        self.assertIn("Potential Scam Campaigns", text)
-        self.assertIn("Number of Emails: 2", text)
-        self.assertIn("Submission IDs: 101, 102", text)
+        campaign_tables = [
+            table for table in document.tables
+            if table.rows
+            and table.rows[0].cells[0].text == "Campaign"
+        ]
 
+        self.assertEqual(len(campaign_tables), 1)
+
+        table = campaign_tables[0]
+
+        self.assertEqual(len(table.rows), 2)
+
+        cells = table.rows[1].cells
+
+        self.assertEqual(cells[0].text, "Group 1")
+        self.assertEqual(cells[1].text, "2")
+        self.assertEqual(cells[2].text, "101, 102")
+        self.assertEqual(cells[3].text, "Phishing")
+        
     def test_campaign_section_excludes_single_emails(self):
         records = [
             {
@@ -310,6 +324,93 @@ class TestWordReportWriter(unittest.TestCase):
         ]
 
         self.assertEqual(len(failed_rows), 6)
+
+
+    def test_guidance_groups_duplicate_advice(self):
+        """Group identical advice while preserving unique recovery steps."""
+
+        records = [
+            {
+                "submission_id": 201,
+                "processing_status": "completed",
+                "primary_threat_type": "phishing",
+                "overall_risk": "high",
+                "risk_score": 90,
+                "threat_summary": "Bank impersonation.",
+                "preventive_steps": [
+                    "Do not click suspicious links."
+                ],
+                "recovery_steps": [
+                    "Change your password."
+                ],
+            },
+            {
+                "submission_id": 202,
+                "processing_status": "completed",
+                "primary_threat_type": "phishing",
+                "overall_risk": "high",
+                "risk_score": 85,
+                "threat_summary": "Bank impersonation.",
+                "preventive_steps": [
+                    "Do not click suspicious links."
+                ],
+                "recovery_steps": [
+                    "Contact your bank."
+                ],
+            },
+        ]
+
+        report = BatchReport({}, records)
+        self.writer.export(report, self.output_path)
+
+        document = Document(self.output_path)
+
+        heading_text = [
+            p.text for p in document.paragraphs
+            if p.style.name == "Heading 2"
+        ]
+
+        self.assertIn("Phishing — 2 emails", heading_text)
+
+        guidance_start = next(
+            i for i, p in enumerate(document.paragraphs)
+            if p.text == "AI Educational Guidance"
+        )
+
+        guidance_end = next(
+            i for i, p in enumerate(document.paragraphs)
+            if p.text == "Methodology and Limitations"
+        )
+
+        guidance_paragraphs = [
+            p.text
+            for p in document.paragraphs[
+                guidance_start:guidance_end
+            ]
+        ]
+
+        self.assertEqual(
+            guidance_paragraphs.count(
+                "Do not click suspicious links."
+            ),
+            1,
+        )
+
+        self.assertEqual(
+            guidance_paragraphs.count("Bank impersonation."),
+            1,
+        )
+
+        self.assertIn(
+            "Change your password.",
+            guidance_paragraphs,
+        )
+
+        self.assertIn(
+            "Contact your bank.",
+            guidance_paragraphs,
+        )
+
 
 
 if __name__ == "__main__":
