@@ -225,6 +225,8 @@ class TestWordReportWriter(unittest.TestCase):
 
         records = []
 
+
+
         # Create 25 high-risk emails.
         for i in range(25):
             records.append({
@@ -255,6 +257,25 @@ class TestWordReportWriter(unittest.TestCase):
                 "input_value": f"Failed email {i}",
                 "error_message": "AI provider timeout",
             })
+
+    
+        # Add sample educational guidance to completed emails.
+        for record in records:
+            if record.get("processing_status") == "completed":
+                record["threat_summary"] = (
+                    "This email may attempt to steal sensitive information."
+                )
+
+                record["preventive_steps"] = [
+                    "Verify the sender before responding.",
+                    "Avoid clicking suspicious links."
+                ]
+
+                record["recovery_steps"] = [
+                    "Change any exposed passwords.",
+                    "Contact your bank if financial details were shared."
+                ]
+
 
         batch_info = {
             "batch_reference": "BATCH-LARGE-001",

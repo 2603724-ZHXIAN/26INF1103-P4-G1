@@ -2,6 +2,10 @@ from pathlib import Path
 from docx import Document
 
 from src.batch.batch_report import BatchReport
+from docx.shared import RGBColor
+from docx.shared import RGBColor, Pt
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
 
 
 class WordReportWriter:
@@ -102,6 +106,9 @@ class WordReportWriter:
             cells[1].text = str(count)
             cells[2].text = f"{percentage:.2f}%"
 
+        self._style_table(table)
+        
+
     def _add_threat_section(
         self, document, report: BatchReport
     ) -> None:
@@ -123,8 +130,12 @@ class WordReportWriter:
                 cells = threat_table.add_row().cells
                 cells[0].text = threat["threat_type"].title()
                 cells[1].text = str(threat["count"])
+
+            self._style_table(threat_table)
         else:
             document.add_paragraph("No classified threats available.")
+
+        
 
     def _add_campaign_section(
         self, document, report: BatchReport
@@ -183,6 +194,8 @@ class WordReportWriter:
                 )
             else:
                 cells[3].text = "Unknown"
+
+        self._style_table(table)
 
     def _add_ranked_section(
         self, document, report: BatchReport
@@ -279,8 +292,13 @@ class WordReportWriter:
                 cells[1].text = str(
                     record.get("error_message") or "No error details available"
                 )
+
+            self._style_table(failed_table)
+
         else:
             document.add_paragraph("No failed email analyses.")
+
+            
 
 
     def _add_guidance_section(
@@ -435,6 +453,50 @@ class WordReportWriter:
 
         document.add_paragraph(message)
 
+    def _apply_risk_colour(self, cell, risk_level: str) -> None:
+        """Apply a consistent colour to a risk-level table cell."""
+
+        colours = {
+            "high": RGBColor(192, 0, 0),
+            "medium": RGBColor(191, 143, 0),
+            "low": RGBColor(0, 128, 0),
+            "failed": RGBColor(100, 100, 100),
+        }
+
+        colour = colours.get(str(risk_level).lower())
+
+        if colour is None:
+            return
+
+        for paragraph in cell.paragraphs:
+            for run in paragraph.runs:
+                run.font.color.rgb = colour
+                run.bold = True
+
+
+    def _style_table(self, table) -> None:
+        """Apply consistent formatting to a Word table."""
+
+        table.style = "Table Grid"
+
+        for row_index, row in enumerate(table.rows):
+            for cell in row.cells:
+
+                # Shade the header row.
+                if row_index == 0:
+                    shading = OxmlElement("w:shd")
+                    shading.set(qn("w:fill"), "DCE6F1")
+                    cell._tc.get_or_add_tcPr().append(shading)
+
+                # Format the text inside each cell.
+                for paragraph in cell.paragraphs:
+                    for run in paragraph.runs:
+                        run.font.size = Pt(9)
+
+                        if row_index == 0:
+                            run.bold = True
+
+
     def _add_all_emails_section(
         self, document, report: BatchReport
     ) -> None:
@@ -491,3 +553,7 @@ class WordReportWriter:
                 row[1].text = str(risk).title() if risk else "Unknown"
                 row[2].text = str(score) if score is not None else "—"
                 row[3].text = str(threat).title() if threat else "—"
+
+            self._apply_risk_colour(row[1], row[1].text)
+
+        self._style_table(table)
