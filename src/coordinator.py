@@ -414,10 +414,14 @@ class EngineCoordinator:
                     self._io.display_batch_email_rows(matches)
 
             except (DataManagerError, ValueError, OSError) as error:
-                LOGGER.exception("Could not load batch emails.")
-                self._io._print(
-                    f"Could not load batch emails: {error}"
+                action = (
+                    "export Word report"
+                    if choice == "4"
+                    else "load batch emails"
                 )
+
+                LOGGER.exception("Could not %s.", action)
+                self._io._print(f"Could not {action}: {error}")
 
     def _handle_batch_menu_request(self, request: dict) -> None:
         """Process a batch and display its saved summary."""
