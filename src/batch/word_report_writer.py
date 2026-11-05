@@ -216,7 +216,6 @@ class WordReportWriter:
         for result in ranked_results:
             submission_id = result.get("submission_id")
             risk_level = result.get("overall_risk") or "Unknown"
-            risk_score = result.get("risk_score")
             threat_type = result.get("primary_threat_type")
             threat_summary = result.get("threat_summary")
             recommended_action = result.get("recommended_action")
@@ -231,9 +230,6 @@ class WordReportWriter:
                 f"Risk Level: {str(risk_level).title()}"
             )
 
-            document.add_paragraph(
-                f"Risk Score: {risk_score}/100"
-            )
 
             if threat_type:
                 document.add_paragraph(
@@ -403,7 +399,7 @@ class WordReportWriter:
             "Emails are analysed using AI and predefined business rules.",
             "Risk distribution is calculated from classified emails.",
             "Common threat types are counted from completed analyses.",
-            "High-risk emails are prioritised by risk score.",
+            "Emails are prioritised by risk category (High, Medium, Low).",
             "Similar emails are grouped using text similarity."
         ]
 
@@ -416,7 +412,7 @@ class WordReportWriter:
             "AI-generated classifications may be inaccurate.",
             "Similar emails do not necessarily originate from the same attacker.",
             "Failed analyses are excluded from risk classifications.",
-            "Risk scores indicate potential threats but are not guarantees."
+            "Risk categories indicate potential threats but are not guarantees."
         ]
 
         for item in limitations:
@@ -497,6 +493,7 @@ class WordReportWriter:
                             run.bold = True
 
 
+
     def _add_all_emails_section(
         self, document, report: BatchReport
     ) -> None:
@@ -522,13 +519,13 @@ class WordReportWriter:
             document.add_paragraph("No emails available.")
             return
 
-        table = document.add_table(rows=1, cols=4)
+        # Three columns: numerical scores are not used.
+        table = document.add_table(rows=1, cols=3)
         table.style = "Table Grid"
 
         headers = [
             "Email ID",
             "Risk Level",
-            "Score",
             "Threat Type",
         ]
 
@@ -540,7 +537,6 @@ class WordReportWriter:
 
             status = record.get("processing_status")
             risk = record.get("overall_risk")
-            score = record.get("risk_score")
             threat = record.get("primary_threat_type")
 
             row[0].text = str(record.get("submission_id", "—"))
@@ -548,11 +544,9 @@ class WordReportWriter:
             if status == "failed":
                 row[1].text = "Failed"
                 row[2].text = "—"
-                row[3].text = "—"
             else:
                 row[1].text = str(risk).title() if risk else "Unknown"
-                row[2].text = str(score) if score is not None else "—"
-                row[3].text = str(threat).title() if threat else "—"
+                row[2].text = str(threat).title() if threat else "—"
 
             self._apply_risk_colour(row[1], row[1].text)
 

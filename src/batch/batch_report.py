@@ -90,8 +90,15 @@ class BatchReport:
             {"threat_type": threat, "count": count}
             for threat, count in counts.most_common()
         ]
+
     def get_ranked_results(self) -> list[dict]:
-        """Rank completed email analyses by risk score, highest first."""
+        """Rank completed emails by risk category, highest first."""
+
+        risk_priority = {
+            "high": 3,
+            "medium": 2,
+            "low": 1,
+        }
 
         ranked_records = []
 
@@ -99,21 +106,20 @@ class BatchReport:
             if record.get("processing_status") != "completed":
                 continue
 
-            score = record.get("risk_score")
+            risk = record.get("overall_risk")
 
-            if isinstance(score, bool):
+            if not isinstance(risk, str):
                 continue
 
-            if not isinstance(score, (int, float)):
-                continue
+            risk = risk.strip().casefold()
 
-            if not 0 <= score <= 100:
+            if risk not in risk_priority:
                 continue
 
             ranked_records.append({
                 "submission_id": record.get("submission_id"),
-                "overall_risk": record.get("overall_risk"),
-                "risk_score": score,
+                "overall_risk": risk,
+                "risk_score": record.get("risk_score"),
                 "primary_threat_type": record.get("primary_threat_type"),
                 "threat_summary": record.get("threat_summary"),
                 "recommended_action": record.get("recommended_action"),
@@ -121,14 +127,15 @@ class BatchReport:
             })
 
         ranked_records.sort(
-            key=lambda record: record["risk_score"],
+            key=lambda record: risk_priority[record["overall_risk"]],
             reverse=True,
         )
 
         return ranked_records
 
+
     def get_high_risk_results(self) -> list[dict]:
-        """Return high-risk emails ordered by risk score."""
+        """Return completed high-risk emails in their original order."""
 
         ranked_results = self.get_ranked_results()
 

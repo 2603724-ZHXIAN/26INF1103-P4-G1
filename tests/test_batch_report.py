@@ -247,24 +247,49 @@ class TestBatchReport(unittest.TestCase):
         self.assertEqual(len(ranked), 1)
         self.assertEqual(ranked[0]["submission_id"], 101)
 
-    def test_get_ranked_results_ignores_invalid_scores(self):
+
+    def test_get_ranked_results_with_missing_scores(self):
+        """Emails with missing scores should rank by risk category."""
+
         email_records = [
-            {"submission_id": 1, "processing_status": "completed", "risk_score": None},
-            {"submission_id": 2, "processing_status": "completed", "risk_score": "90"},
-            {"submission_id": 3, "processing_status": "completed", "risk_score": True},
-            {"submission_id": 4, "processing_status": "completed", "risk_score": -5},
-            {"submission_id": 5, "processing_status": "completed", "risk_score": 120},
-            {"submission_id": 6, "processing_status": "completed", "risk_score": float("nan")},
-            {"submission_id": 7, "processing_status": "completed", "risk_score": 80},
+            {
+                "submission_id": 1,
+                "processing_status": "completed",
+                "overall_risk": "low",
+                "risk_score": None,
+            },
+            {
+                "submission_id": 2,
+                "processing_status": "completed",
+                "overall_risk": "high",
+                "risk_score": None,
+            },
+            {
+                "submission_id": 3,
+                "processing_status": "completed",
+                "overall_risk": "medium",
+                "risk_score": None,
+            },
+            {
+                "submission_id": 4,
+                "processing_status": "failed",
+                "overall_risk": "high",
+                "risk_score": None,
+            },
         ]
 
         report = BatchReport({}, email_records)
-
         ranked = report.get_ranked_results()
 
-        self.assertEqual(len(ranked), 1)
-        self.assertEqual(ranked[0]["submission_id"], 7)
-        self.assertEqual(ranked[0]["risk_score"], 80)
+        self.assertEqual(
+            [record["submission_id"] for record in ranked],
+            [2, 3, 1]
+        )
+
+        self.assertTrue(
+            all(record["risk_score"] is None for record in ranked)
+        )
+
 
     def test_get_ranked_results_empty_batch(self):
         report = BatchReport({}, [])
@@ -324,7 +349,7 @@ class TestBatchReport(unittest.TestCase):
         self.assertEqual(report.get_campaign_groups(), [])
 
     def test_get_high_risk_results(self):
-        """Only high-risk emails should be returned, highest score first."""
+        """Only completed high-risk emails should be returned."""
 
         batch_info = {
             "batch_reference": "TEST-001"
@@ -364,8 +389,8 @@ class TestBatchReport(unittest.TestCase):
         self.assertEqual(len(results), 2)
         self.assertEqual(
             [result["submission_id"] for result in results],
-            [3, 2]
+            [2, 3]
         )
-        
+
 if __name__ == "__main__":
     unittest.main()

@@ -119,7 +119,8 @@ class TestWordReportWriter(unittest.TestCase):
         # Verify the high-risk submission is displayed.
         self.assertIn("Submission #101", text)
         self.assertIn("Risk Level: High", text)
-        self.assertIn("Risk Score: 95/100", text)
+        self.assertIn("Risk Level: High", text)
+        self.assertNotIn("Risk Score:", text)
 
         # Verify additional information is displayed.
         self.assertIn("Threat Type: Phishing", text)
