@@ -14,6 +14,8 @@ Demonstrates OOP Rubric Principles:
 import json
 import logging
 from typing import Optional
+import re
+from pathlib import Path
 
 from .managers.ai_manager import AIManager
 from .managers.data_manager import DataManager, DataManagerError
@@ -22,6 +24,8 @@ from .managers.logic_manager import LogicManager
 from .models.submission import Submission
 from .services.virustotal_scanner import VirusTotalScanner
 from .services.email_ingestion_service import EmailIngestionService
+from src.batch.batch_report_service import BatchReportService
+from src.batch.word_report_writer import WordReportWriter
 
 LOGGER = logging.getLogger(__name__)
 
@@ -373,8 +377,17 @@ class EngineCoordinator:
                     )
 
                 elif choice == "4":
+                    report_service = BatchReportService(self._data)
+                    report = report_service.build_report(reference)
+
+                    safe_reference = re.sub(r"[^A-Za-z0-9_-]", "_", reference)
+                    output_path = str(Path("reports") / f"{safe_reference}.docx")
+
+                    writer = WordReportWriter()
+                    saved_path = writer.export(report, output_path)
+
                     self._io._print(
-                        "Word report download is not connected yet."
+                        f"Word report saved successfully: {saved_path}"
                     )
                     continue
 
@@ -400,11 +413,15 @@ class EngineCoordinator:
                     self._io.review_batch_email(details)
                     self._io.display_batch_email_rows(matches)
 
-            except (DataManagerError, ValueError) as error:
-                LOGGER.exception("Could not load batch emails.")
-                self._io._print(
-                    f"Could not load batch emails: {error}"
+            except (DataManagerError, ValueError, OSError) as error:
+                action = (
+                    "export Word report"
+                    if choice == "4"
+                    else "load batch emails"
                 )
+
+                LOGGER.exception("Could not %s.", action)
+                self._io._print(f"Could not {action}: {error}")
 
     def _handle_batch_menu_request(self, request: dict) -> None:
         """Process a batch and display its saved summary."""
