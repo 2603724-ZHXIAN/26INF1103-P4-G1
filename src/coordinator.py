@@ -465,6 +465,7 @@ class EngineCoordinator:
             self._io._print(
                 f"Could not load previous batches: {error}"
             )
+
     # -------------------------------------------------------------------------
     # Pipeline: URL / File Resource Analysis (VirusTotal)
     # -------------------------------------------------------------------------
@@ -853,8 +854,7 @@ class EngineCoordinator:
     # Private Helpers
     # -------------------------------------------------------------------------
 
-    # Enrich the assessment through its public method while retaining the
-    # action selected by business rules.
+    # Enrich the assessment while preserving the rule-based action.
     @staticmethod
     def _attach_text_education(assessment, ai_result: dict) -> None:
         """Attach AI education while preserving the rule-based action."""
@@ -867,7 +867,6 @@ class EngineCoordinator:
             return
 
         steps = []
-
         recommended_action = assessment.recommended_action
 
         if isinstance(recommended_action, str):
