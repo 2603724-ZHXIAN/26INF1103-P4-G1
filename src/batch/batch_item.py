@@ -37,9 +37,14 @@ class BatchItem:
     def mark_processing(self) -> None:
         self._status = "processing"
 
-    def mark_completed(self, submission: Submission) -> None:
+    def mark_completed(self, submission: Submission, ai_result: typing.Optional[dict] = None) -> None:
         self._status = "completed"
         self._submission = submission
+        self._ai_result = ai_result
+
+    @property
+    def ai_result(self) -> typing.Optional[dict]:
+        return getattr(self, "_ai_result", None)
 
     def mark_failed(self, error_message: str) -> None:
         self._status = "failed"
