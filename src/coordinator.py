@@ -24,8 +24,10 @@ from .managers.logic_manager import LogicManager
 from .models.submission import Submission
 from .services.virustotal_scanner import VirusTotalScanner
 from .services.email_ingestion_service import EmailIngestionService
-from src.batch.batch_report_service import BatchReportService
-from src.batch.word_report_writer import WordReportWriter
+from .batch.batch_item import BatchItem
+from .batch.batch_processor import BatchProcessor
+from .batch.batch_report_service import BatchReportService
+from .batch.word_report_writer import WordReportWriter
 
 LOGGER = logging.getLogger(__name__)
 
@@ -54,6 +56,7 @@ class EngineCoordinator:
         data_manager: DataManager,
         scanner: Optional[VirusTotalScanner] = None,
         ingestion_service: Optional[EmailIngestionService] = None,
+        batch_processor: Optional[BatchProcessor] = None,
     ) -> None:
         """Initialise the coordinator with its composed and aggregated dependencies.
 
@@ -65,6 +68,8 @@ class EngineCoordinator:
             scanner:       VirusTotalScanner service (Aggregation — injected, not owned).
         """
 
+        
+        
         # Aggregation: retain injected application components without
         # taking ownership of their lifecycles.
         self._io: IOManager = io_manager
@@ -76,6 +81,8 @@ class EngineCoordinator:
         self._scanner: Optional[VirusTotalScanner] = scanner
         self._ingestion = ingestion_service
 
+        self._batch_processor = batch_processor
+        
     # -------------------------------------------------------------------------
     # Public Entry Point
     # -------------------------------------------------------------------------
@@ -98,38 +105,45 @@ class EngineCoordinator:
 
             action = request.get("action", "")
 
-            if action == "exit":
-                self._io._print("\nThank you for using the Cyber Threat Detection Engine. Stay safe!")
-                LOGGER.info("User selected exit.")
-                break
+            # Sub-menus (e.g. batch review) ask further questions after the main
+            # menu, so Ctrl+C / closed input must be handled for the whole action.
+            try:
+                if action == "exit":
+                    self._io._print("\nThank you for using the Cyber Threat Detection Engine. Stay safe!")
+                    LOGGER.info("User selected exit.")
+                    break
 
-            elif action == "analyze_submission":
-                input_type = request.get("input_type", "text")
-                if input_type == "text":
-                    self._handle_text_pipeline(request)
+                elif action == "analyze_submission":
+                    input_type = request.get("input_type", "text")
+                    if input_type == "text":
+                        self._handle_text_pipeline(request)
+                    else:
+                        # url or file → VirusTotal pipeline
+                        self._handle_resource_pipeline(request)
+
+                elif action == "batch_email_analysis":
+                    self._handle_batch_menu_request(request)
+
+                elif action == "previous_email_batches":
+                    self._handle_previous_batch_request()
+
+                elif action == "emerging_threat_radar":
+                    self._handle_threat_radar(request)
+
+                elif action == "view_trending_threats":
+                    # IOManager already displayed the trending threats; loop continues
+                    pass
+
+                elif action == "history_query":
+                    # IOManager already handled the history query interactively; loop continues
+                    pass
+
                 else:
-                    # url or file → VirusTotal pipeline
-                    self._handle_resource_pipeline(request)
-
-            elif action == "batch_email_analysis":
-                self._handle_batch_menu_request(request)
-
-            elif action == "previous_email_batches":
-                self._handle_previous_batch_request()
-
-            elif action == "emerging_threat_radar":
-                self._handle_threat_radar(request)
-
-            elif action == "view_trending_threats":
-                # IOManager already displayed the trending threats; loop continues
-                pass
-
-            elif action == "history_query":
-                # IOManager already handled the history query interactively; loop continues
-                pass
-
-            else:
-                LOGGER.warning("Unknown action received from IOManager: %s", action)
+                    LOGGER.warning("Unknown action received from IOManager: %s", action)
+            except (KeyboardInterrupt, EOFError):
+                self._io._print("\n\nSession interrupted. Goodbye!")
+                LOGGER.info("Session interrupted by user during action: %s", action)
+                break
 
     # -------------------------------------------------------------------------
     # Pipeline: Text / Scam Message Analysis
@@ -561,13 +575,10 @@ class EngineCoordinator:
             "processing",
         )
 
-        results = []
-
-        for email in accepted:
-            # Include available headers and attachment metadata in analysis.
-            # This JSON is submitted data, not prompt instructions.
-            analysis_content = json.dumps(
-                {
+        if self._batch_processor is not None:
+            batch_items = []
+            for email in accepted:
+                analysis_content = json.dumps({
                     "subject": email.subject,
                     "sender": email.sender,
                     "reply_to": email.reply_to,
@@ -576,36 +587,157 @@ class EngineCoordinator:
                     "extracted_urls": email.urls,
                     "attachment_metadata": email.attachments,
                     "parsing_warnings": email.warnings,
-                },
-                ensure_ascii=False,
-            )
+                }, ensure_ascii=False)
+                item = BatchItem(
+                    item_id=email.item_id,
+                    email_content=analysis_content,
+                    batch_id=batch_reference
+                )
+                batch_items.append(item)
 
-            submission = Submission(
-                input_type="text",
-                input_value=analysis_content,
-                interaction_type="other",
-                interaction_description=(
-                    "This email was imported for batch analysis. "
-                    "Recipient actions are unknown and have not "
-                    "been reported."
-                ),
-                file_path=email.source_path,
-                data_origin="batch_email",
-                dataset_batch=batch_reference,
-            )
+            processed_items = self._batch_processor.process_batch(batch_items)
 
-            result = self._process_text_submission(
-                submission,
-                email=email,
-            )
+            results = []
+            for item in processed_items:
+                matching_email = next((e for e in accepted if e.item_id == item.item_id), None)
+                result_dict = {
+                    "success": False,
+                    "database_error": False,
+                    "item_id": item.item_id
+                }
+                submission = None
+                try:
+                    if item.status == "completed" and item.ai_result is not None:
+                        submission = Submission(
+                            input_type="text",
+                            input_value=item.email_content,
+                            interaction_type="other",
+                            interaction_description=(
+                                "This email was imported for batch analysis. "
+                                "Recipient actions are unknown and have not been reported."
+                            ),
+                            file_path=matching_email.source_path if matching_email else None,
+                            data_origin="batch_email",
+                            dataset_batch=batch_reference,
+                        )
+                        
+                        submission_id = self._data.save_submission(submission)
+                        self._data.link_submission_to_batch(batch_reference, submission_id)
+                        
+                        if matching_email is not None:
+                            self._data.save_email_metadata(submission_id, matching_email)
+                            
+                        self._data.save_text_analysis(submission_id, item.ai_result, self._get_model_name())
+                        
+                        assessment = self._logic.evaluate_text_threat(submission, item.ai_result)
+                        self._attach_text_education(assessment, item.ai_result)
+                        submission.set_assessment(assessment)
+                        
+                        self._data.save_assessment(submission_id, assessment, self._get_model_name())
+                        
+                        indicators = item.ai_result.get("indicators", {})
+                        if isinstance(indicators, dict):
+                            for indicator_name, indicator_data in indicators.items():
+                                if isinstance(indicator_data, dict) and indicator_data.get("present") is True:
+                                    evidence_text = str(indicator_data.get("evidence", "")).strip()
+                                    severity = "high" if indicator_name in {
+                                        "payment_request", "credential_request", "otp_request", "download_request"
+                                    } else "medium"
+                                    submission.create_evidence(
+                                        name=indicator_name,
+                                        source="gemini",
+                                        evidence_type="indicator",
+                                        evidence_value=evidence_text or None,
+                                        excerpt=evidence_text[:200] if evidence_text else None,
+                                        severity=severity,
+                                    )
+                        if submission.evidences:
+                            self._data.save_evidences(submission_id, submission.evidences)
+                            
+                        submission.mark_completed()
+                        self._data.save_submission(submission)
+                        result_dict["success"] = True
+                    else:
+                        # Handle items that failed background processing
+                        submission = Submission(
+                            input_type="text",
+                            input_value=item.email_content,
+                            interaction_type="other",
+                            interaction_description=(
+                                "This email failed batch processing analysis."
+                            ),
+                            file_path=matching_email.source_path if matching_email else None,
+                            data_origin="batch_email",
+                            dataset_batch=batch_reference,
+                        )
+                        submission_id = self._data.save_submission(submission)
+                        self._data.link_submission_to_batch(batch_reference, submission_id)
+                        if matching_email is not None:
+                            self._data.save_email_metadata(submission_id, matching_email)
+                        
+                        error_msg = item.error_message or "Unknown processing error"
+                        submission.mark_failed(error_msg)
+                        self._data.save_submission(submission)
+                except DataManagerError:
+                    LOGGER.exception("Database persistence failed for item %s", item.item_id)
+                    result_dict["database_error"] = True
+                except (ValueError, TypeError) as error:
+                    # The AI result could not be assessed (e.g. a warning sign was
+                    # flagged without evidence). Fail only this email and continue
+                    # with the rest of the batch instead of stopping it.
+                    LOGGER.exception("Assessment failed for item %s", item.item_id)
+                    result_dict["error"] = str(error)
+                    if submission is not None and submission.submission_id is not None:
+                        try:
+                            submission.mark_failed(str(error))
+                            self._data.save_submission(submission)
+                        except DataManagerError:
+                            LOGGER.exception("Could not save failure for item %s", item.item_id)
+                            result_dict["database_error"] = True
+                
+                results.append(result_dict)
+                if result_dict["database_error"]:
+                    break
 
-            result["item_id"] = email.item_id
-            results.append(result)
 
-            # Stop if persistence is unreliable. AI/logic failures alone
-            # do not stop subsequent emails.
-            if result["database_error"]:
-                break
+        else:
+            results = []
+            for email in accepted:
+                analysis_content = json.dumps({
+                    "subject": email.subject,
+                    "sender": email.sender,
+                    "reply_to": email.reply_to,
+                    "recipients": email.recipients,
+                    "body_text": email.body_text,
+                    "extracted_urls": email.urls,
+                    "attachment_metadata": email.attachments,
+                    "parsing_warnings": email.warnings,
+                }, ensure_ascii=False)
+
+                submission = Submission(
+                    input_type="text",
+                    input_value=analysis_content,
+                    interaction_type="other",
+                    interaction_description=(
+                        "This email was imported for batch analysis. "
+                        "Recipient actions are unknown and have not "
+                        "been reported."
+                    ),
+                    file_path=email.source_path,
+                    data_origin="batch_email",
+                    dataset_batch=batch_reference,
+                )
+
+                result = self._process_text_submission(
+                    submission,
+                    email=email,
+                )
+
+                result["item_id"] = email.item_id
+                results.append(result)
+
+                if result["database_error"]:
+                    break
 
         successful_count = 0
         analysis_failed_count = 0

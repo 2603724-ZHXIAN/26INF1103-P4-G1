@@ -9,3 +9,7 @@ venv/
 *.log
 logic_manager.py.py
 tempCodeRunnerFile.py
+# Local runtime data: mounted at run time, never baked into the image
+data/database.db
+reports/
+Claude outputs/

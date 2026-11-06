@@ -1602,18 +1602,30 @@ class DataManager:
         """Compatibility alias for query_by_risk."""
         return self.query_by_risk(risk_category)
 
+    # One row per analysed submission with its threat type, whether it was
+    # analysed as text or as a URL/file. Fixed SQL text (no user input).
+    _ALL_THREAT_TYPES_SQL = """
+        SELECT submission_id, primary_threat_type FROM text_analysis
+        UNION ALL
+        SELECT submission_id, threat_type AS primary_threat_type
+        FROM technical_ai_analysis"""
+
     def get_top_threat_types(self, *args, **kwargs) -> list[dict]:
         limit = kwargs.get('limit', 10)
         for arg in args:
             if isinstance(arg, int):
                 limit = arg
-        """Return the most common primary threat types from text analyses."""
+        """Return the most common threat types across text, URL and file analyses.
+
+        Text verdicts live in text_analysis.primary_threat_type and URL/file
+        verdicts in technical_ai_analysis.threat_type, so both are counted.
+        """
         with self._get_connection() as connection:
             rows = connection.execute(
-                """SELECT primary_threat_type, COUNT(*) AS total
-                FROM text_analysis
+                f"""SELECT primary_threat_type, COUNT(*) AS total
+                FROM ({self._ALL_THREAT_TYPES_SQL})
                 GROUP BY primary_threat_type
-                ORDER BY total DESC
+                ORDER BY total DESC, primary_threat_type
                 LIMIT ?""",
                 (limit,),
             ).fetchall()
@@ -1645,10 +1657,10 @@ class DataManager:
                     limit = positional[1]
             else:
                 threat_type = ''
-        """Return the latest incidents matching a specific threat type."""
+        """Return the latest text, URL or file incidents of one threat type."""
         with self._get_connection() as connection:
             rows = connection.execute(
-                """SELECT
+                f"""SELECT
                     s.submission_id,
                     s.input_type,
                     s.input_value,
@@ -1656,7 +1668,8 @@ class DataManager:
                     ta.primary_threat_type,
                     fa.risk_category
                 FROM submission AS s
-                JOIN text_analysis AS ta ON ta.submission_id = s.submission_id
+                JOIN ({self._ALL_THREAT_TYPES_SQL}) AS ta
+                    ON ta.submission_id = s.submission_id
                 LEFT JOIN final_assessment AS fa ON fa.submission_id = s.submission_id
                 WHERE ta.primary_threat_type = ?
                 ORDER BY s.created_at DESC

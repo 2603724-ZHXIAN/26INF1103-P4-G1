@@ -1,0 +1,12 @@
+From: invoicing@corporate-vendor-portal.com
+To: user@example.com
+Subject: Invoice #INV-2026-998 requires your authorization
+MIME-Version: 1.0
+Content-Type: text/plain; charset="UTF-8"
+
+Hello,
+
+A new invoice for professional services is pending your review. Please authorize payment using your corporate credit card by replying directly to this message with your card credentials.
+
+Regards,
+Accounting

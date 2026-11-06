@@ -1,0 +1,12 @@
+From: billing@merchant-support-desk.com
+To: user@example.com
+Subject: Payment Failed: Update your credit card info
+MIME-Version: 1.0
+Content-Type: text/plain; charset="UTF-8"
+
+Hi,
+
+Your monthly subscription payment could not be processed because your card expired. Please provide your new credit card expiration date and CVV to avoid service interruption.
+
+Thanks,
+Customer Support

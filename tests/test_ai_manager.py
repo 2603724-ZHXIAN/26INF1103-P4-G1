@@ -194,7 +194,13 @@ class TestAIManagerAnalysisAndEducation(unittest.TestCase):
                 "threatening_language": {"present": False, "evidence": ""},
                 "reward_or_prize": {"present": False, "evidence": ""},
             },
-            "other_warning_signs": ["Unregistered sender number"],
+            "other_warning_signs": [
+                {
+                    "name": "Unregistered sender number",
+                    "evidence": "Sent from +65 8123 4567",
+                    "explanation": "Banks send SMS from registered sender IDs.",
+                }
+            ],
             "user_exposure": {
                 "clicked_or_opened_link": True,
                 "entered_credentials": False,

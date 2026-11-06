@@ -12,3 +12,6 @@ venv/
 # Runtime logs
 *.log
 tempCodeRunnerFile.py
+
+# Local SQLite database (created at runtime; rebuild sample data with: python load_synthetic_data.py)
+data/database.db

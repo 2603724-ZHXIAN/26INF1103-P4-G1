@@ -316,7 +316,9 @@ class DataManagerTests(unittest.TestCase):
             "extracted_urls": ["https://example.com/first"],
             "extracted_contacts": ["first@example.com"],
             "suspected_threat_types": ["phishing"],
-            "other_warning_signs": ["First warning"],
+            "other_warning_signs": [
+                {"name": "First warning", "evidence": "First quote", "explanation": "First reason"}
+            ],
             "user_exposure": {"description_summary": "Unknown"},
         }
 
@@ -330,7 +332,9 @@ class DataManagerTests(unittest.TestCase):
             "extracted_urls": ["https://example.com/second"],
             "extracted_contacts": ["second@example.com"],
             "suspected_threat_types": ["credential_phishing"],
-            "other_warning_signs": ["Second warning"],
+            "other_warning_signs": [
+                {"name": "Second warning", "evidence": "Second quote", "explanation": "Second reason"}
+            ],
             "user_exposure": {"description_summary": "Link clicked"},
         }
 

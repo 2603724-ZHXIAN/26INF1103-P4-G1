@@ -9,6 +9,7 @@ Demonstrates:
 
 import logging
 import os
+import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -23,6 +24,9 @@ from src.services.groq_client import GroqClient
 from src.services.virustotal_scanner import VirusTotalScanner
 from src.services.email_ingestion_service import EmailIngestionService
 from src.services.eml_parser import EmlParser
+from src.batch.rate_limiter import RateLimiter
+from src.batch.batch_processor import BatchProcessor
+
 # ---------------------------------------------------------------------------
 # Logging configuration
 # ---------------------------------------------------------------------------
@@ -31,6 +35,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
 )
+LOGGER = logging.getLogger(__name__)
 
 
 def main() -> None:
@@ -72,13 +77,37 @@ def main() -> None:
 
     # --- Manager layer -------------------------------------------------------
     data_manager = DataManager(db_path="data/database.db")
-    data_manager.initialize_database()
-
-    ai_manager = AIManager(llm_client=gemini_client, fallback_client=groq_client)
-    logic_manager = LogicManager()
     io_manager = IOManager(data_manager=data_manager)
 
+    # A missing database is created automatically; a damaged or unreadable
+    # one is reported clearly instead of crashing with a traceback.
+    try:
+        data_manager.initialize_database()
+    except DataManagerError:
+        LOGGER.exception("Start-up failed: the database could not be opened.")
+        io_manager.display_database_startup_error("data/database.db")
+        sys.exit(1)
+
+    ai_manager = AIManager(llm_client=gemini_client, fallback_client=groq_client)
+    if not ai_manager.is_configured:
+        LOGGER.warning("Starting without an AI provider: no API key configured.")
+        io_manager.display_ai_configuration_warning()
+
+    logic_manager = LogicManager()
+
     # --- Coordinator (Composition + Aggregation) ----------------------------
+    
+    rate_limiter = RateLimiter(max_calls=15, time_window=60)
+
+   
+
+    batch_processor = BatchProcessor(
+        ai_manager=ai_manager,
+        logic_manager=logic_manager,
+        rate_limiter=rate_limiter,
+        max_workers=5
+    )
+
     coordinator = EngineCoordinator(
         io_manager=io_manager,
         ai_manager=ai_manager,
@@ -86,7 +115,10 @@ def main() -> None:
         data_manager=data_manager,
         scanner=scanner,
         ingestion_service=ingestion_service,
+        batch_processor=batch_processor,
     )
+
+
 
     coordinator.run()
 
