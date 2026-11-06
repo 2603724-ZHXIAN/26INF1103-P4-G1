@@ -9,12 +9,14 @@ from src.models.submission import Submission
 from src.models.evidence import ThreatEvidence
 
 class BatchProcessor:
+    _print_lock = threading.Lock()
     def __init__(self, ai_manager: AIManager, logic_manager: LogicManager, rate_limiter: RateLimiter, max_workers: int = 5) -> None:
         self._ai_manager = ai_manager
         self._logic_manager = logic_manager
         self._rate_limiter = rate_limiter
         self._max_workers = max_workers
         self._cancel_event = threading.Event()
+
 
     def process_batch(self, items: typing.List[BatchItem]) -> typing.List[BatchItem]:
         results = []
@@ -25,7 +27,13 @@ class BatchProcessor:
                 results.append(future.result())
         return results
 
+
     def _worker_task(self, item: BatchItem) -> BatchItem:
+        thread_name = threading.current_thread().name
+        
+        with self._print_lock:
+            print(f"Worker {thread_name} started processing email {item.item_id}")
+
         if self._cancel_event.is_set():
             item.mark_failed("Task cancelled")
             return item
@@ -57,6 +65,9 @@ class BatchProcessor:
 
         except Exception as e:
             item.mark_failed(str(e))
+
+        with self._print_lock:
+            print(f"Worker {thread_name} finished processing email {item.item_id}")
 
         return item
 
