@@ -23,6 +23,9 @@ from src.services.groq_client import GroqClient
 from src.services.virustotal_scanner import VirusTotalScanner
 from src.services.email_ingestion_service import EmailIngestionService
 from src.services.eml_parser import EmlParser
+from src.batch.rate_limiter import RateLimiter
+from src.batch.batch_processor import BatchProcessor
+
 # ---------------------------------------------------------------------------
 # Logging configuration
 # ---------------------------------------------------------------------------
@@ -79,6 +82,15 @@ def main() -> None:
     io_manager = IOManager(data_manager=data_manager)
 
     # --- Coordinator (Composition + Aggregation) ----------------------------
+    rate_limiter = RateLimiter(max_calls=15, time_window=60)
+    
+    batch_processor = BatchProcessor(
+        ai_manager=ai_manager,
+        logic_manager=logic_manager,
+        rate_limiter=rate_limiter,
+        max_workers=5
+    )
+    
     coordinator = EngineCoordinator(
         io_manager=io_manager,
         ai_manager=ai_manager,
@@ -86,7 +98,10 @@ def main() -> None:
         data_manager=data_manager,
         scanner=scanner,
         ingestion_service=ingestion_service,
+        batch_processor=batch_processor,
     )
+
+
 
     coordinator.run()
 
