@@ -60,4 +60,7 @@ class BatchProcessor:
 
         return item
 
-    
+    def cancel(self) -> None:
+        self._cancel_event.set()
+
+        
