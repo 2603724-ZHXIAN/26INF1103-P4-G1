@@ -553,6 +553,23 @@ class TestRunLoopDispatch(unittest.TestCase):
         self.addCleanup(self.coord._data.close)
         self.coord._io._print = lambda *a, **kw: None
 
+    def test_closed_input_inside_a_sub_menu_ends_session_cleanly(self):
+        """EOF (closed input) raised after the main menu must end the session cleanly."""
+        printed = []
+        self.coord._io._print = lambda *a, **kw: printed.append(" ".join(map(str, a)))
+        self.coord._io.collect_user_request = MagicMock(
+            return_value={"action": "previous_email_batches"}
+        )
+        self.coord._handle_previous_batch_request = MagicMock(side_effect=EOFError)
+
+        try:
+            self.coord.run()
+        except EOFError:
+            self.fail("Closed input escaped run(): a sub-menu crashed the app.")
+
+        self.coord._handle_previous_batch_request.assert_called_once()
+        self.assertTrue(any("Goodbye" in line for line in printed))
+
     def test_run_exits_on_exit_action(self):
         """Single 'exit' request → run() returns normally."""
         self.coord._io.collect_user_request = MagicMock(
@@ -1119,6 +1136,29 @@ class TestConcurrentBatchCoordinator(unittest.TestCase):
         self.assertEqual([status for status, _ in statuses], ["completed", "completed", "failed"])
         self.assertIn("invalid warning indicators", statuses[-1][1])
         self.assertNotIn("pending", [status for status, _ in statuses])
+
+    def test_ctrl_c_in_batch_review_menu_ends_session_cleanly(self):
+        """Ctrl+C inside the post-scan batch menu must not crash the app (bug B2)."""
+        self.ai.analyze_message.side_effect = self._answer_with("no-match", {})
+        io = self.coord._io
+        io.collect_user_request.return_value = {
+            "action": "batch_email_analysis",
+            "paths": ["test_emails"],
+        }
+        io.collect_batch_input_request.return_value = {
+            "action": "batch_email_analysis",
+            "paths": ["test_emails"],
+        }
+        io.collect_batch_review_request.side_effect = KeyboardInterrupt
+
+        try:
+            self.coord.run()
+        except KeyboardInterrupt:
+            self.fail("Ctrl+C escaped run(): the batch review menu crashed the app.")
+
+        io.collect_batch_review_request.assert_called()
+        printed = " ".join(str(call.args[0]) for call in io._print.call_args_list if call.args)
+        self.assertIn("Goodbye", printed)
 
 
 if __name__ == "__main__":

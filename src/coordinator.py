@@ -102,38 +102,45 @@ class EngineCoordinator:
 
             action = request.get("action", "")
 
-            if action == "exit":
-                self._io._print("\nThank you for using the Cyber Threat Detection Engine. Stay safe!")
-                LOGGER.info("User selected exit.")
-                break
+            # Sub-menus (e.g. batch review) ask further questions after the main
+            # menu, so Ctrl+C / closed input must be handled for the whole action.
+            try:
+                if action == "exit":
+                    self._io._print("\nThank you for using the Cyber Threat Detection Engine. Stay safe!")
+                    LOGGER.info("User selected exit.")
+                    break
 
-            elif action == "analyze_submission":
-                input_type = request.get("input_type", "text")
-                if input_type == "text":
-                    self._handle_text_pipeline(request)
+                elif action == "analyze_submission":
+                    input_type = request.get("input_type", "text")
+                    if input_type == "text":
+                        self._handle_text_pipeline(request)
+                    else:
+                        # url or file → VirusTotal pipeline
+                        self._handle_resource_pipeline(request)
+
+                elif action == "batch_email_analysis":
+                    self._handle_batch_menu_request(request)
+
+                elif action == "previous_email_batches":
+                    self._handle_previous_batch_request()
+
+                elif action == "emerging_threat_radar":
+                    self._handle_threat_radar(request)
+
+                elif action == "view_trending_threats":
+                    # IOManager already displayed the trending threats; loop continues
+                    pass
+
+                elif action == "history_query":
+                    # IOManager already handled the history query interactively; loop continues
+                    pass
+
                 else:
-                    # url or file → VirusTotal pipeline
-                    self._handle_resource_pipeline(request)
-
-            elif action == "batch_email_analysis":
-                self._handle_batch_menu_request(request)
-
-            elif action == "previous_email_batches":
-                self._handle_previous_batch_request()
-
-            elif action == "emerging_threat_radar":
-                self._handle_threat_radar(request)
-
-            elif action == "view_trending_threats":
-                # IOManager already displayed the trending threats; loop continues
-                pass
-
-            elif action == "history_query":
-                # IOManager already handled the history query interactively; loop continues
-                pass
-
-            else:
-                LOGGER.warning("Unknown action received from IOManager: %s", action)
+                    LOGGER.warning("Unknown action received from IOManager: %s", action)
+            except (KeyboardInterrupt, EOFError):
+                self._io._print("\n\nSession interrupted. Goodbye!")
+                LOGGER.info("Session interrupted by user during action: %s", action)
+                break
 
     # -------------------------------------------------------------------------
     # Pipeline: Text / Scam Message Analysis
