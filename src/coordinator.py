@@ -22,6 +22,9 @@ from .managers.logic_manager import LogicManager
 from .models.submission import Submission
 from .services.virustotal_scanner import VirusTotalScanner
 from .services.email_ingestion_service import EmailIngestionService
+from .batch.batch_item import BatchItem
+from .batch.batch_processor import BatchProcessor  
+
 
 LOGGER = logging.getLogger(__name__)
 
@@ -50,6 +53,7 @@ class EngineCoordinator:
         data_manager: DataManager,
         scanner: Optional[VirusTotalScanner] = None,
         ingestion_service: Optional[EmailIngestionService] = None,
+        batch_processor: Optional[BatchProcessor] = None,
     ) -> None:
         """Initialise the coordinator with its composed and aggregated dependencies.
 
@@ -61,6 +65,8 @@ class EngineCoordinator:
             scanner:       VirusTotalScanner service (Aggregation — injected, not owned).
         """
 
+        
+        
         # Aggregation: retain injected application components without
         # taking ownership of their lifecycles.
         self._io: IOManager = io_manager
@@ -72,6 +78,8 @@ class EngineCoordinator:
         self._scanner: Optional[VirusTotalScanner] = scanner
         self._ingestion = ingestion_service
 
+        self._batch_processor = batch_processor
+        
     # -------------------------------------------------------------------------
     # Public Entry Point
     # -------------------------------------------------------------------------
@@ -520,11 +528,8 @@ class EngineCoordinator:
             "processing",
         )
 
-        results = []
-
+        batch_items = []
         for email in accepted:
-            # Include available headers and attachment metadata in analysis.
-            # This JSON is submitted data, not prompt instructions.
             analysis_content = json.dumps(
                 {
                     "subject": email.subject,
@@ -538,32 +543,39 @@ class EngineCoordinator:
                 },
                 ensure_ascii=False,
             )
-
-            submission = Submission(
-                input_type="text",
-                input_value=analysis_content,
-                interaction_type="other",
-                interaction_description=(
-                    "This email was imported for batch analysis. "
-                    "Recipient actions are unknown and have not "
-                    "been reported."
-                ),
-                file_path=email.source_path,
-                data_origin="batch_email",
-                dataset_batch=batch_reference,
+            item = BatchItem(
+                item_id=email.item_id,
+                email_content=analysis_content,
+                batch_id=batch_reference
             )
+            batch_items.append(item)
 
-            result = self._process_text_submission(
-                submission,
-                email=email,
-            )
+        processed_items = self._batch_processor.process_batch(batch_items)
 
-            result["item_id"] = email.item_id
-            results.append(result)
-
-            # Stop if persistence is unreliable. AI/logic failures alone
-            # do not stop subsequent emails.
-            if result["database_error"]:
+        results = []
+        for item in processed_items:
+            result_dict = {
+                "success": item.status == "completed",
+                "database_error": False,
+                "item_id": item.item_id
+            }
+            try:
+                if item.status == "completed":
+                    self._data.save_submission(item.submission)
+                elif item.status == "failed":
+                    failed_sub = Submission(
+                        input_type="text",
+                        input_value=item.email_content,
+                        data_origin="batch",
+                        dataset_batch=batch_reference
+                    )
+                    self._data.save_submission(failed_sub)
+            except DataManagerError:
+                result_dict["database_error"] = True
+            
+            results.append(result_dict)
+            
+            if result_dict["database_error"]:
                 break
 
         successful_count = 0
