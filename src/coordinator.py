@@ -13,7 +13,7 @@ Demonstrates OOP Rubric Principles:
 
 import json
 import logging
-from typing import Optional
+from typing import Callable, Dict, Optional
 import re
 from pathlib import Path
 
@@ -90,10 +90,12 @@ class EngineCoordinator:
     def run(self) -> None:
         """Collect requests and dispatch them to the appropriate workflow.
 
-        Uses explicit action branches; introducing a new action requires
-        updating this dispatch method.
+        OCP: dispatch is table-driven. run() looks the action up in
+        _build_action_handlers(), so a new menu feature is added by writing a
+        handler and registering it there, without modifying this loop.
         """
         LOGGER.info("EngineCoordinator.run() started.")
+        handlers = self._build_action_handlers()
 
         while True:
             try:
@@ -113,37 +115,50 @@ class EngineCoordinator:
                     LOGGER.info("User selected exit.")
                     break
 
-                elif action == "analyze_submission":
-                    input_type = request.get("input_type", "text")
-                    if input_type == "text":
-                        self._handle_text_pipeline(request)
-                    else:
-                        # url or file → VirusTotal pipeline
-                        self._handle_resource_pipeline(request)
-
-                elif action == "batch_email_analysis":
-                    self._handle_batch_menu_request(request)
-
-                elif action == "previous_email_batches":
-                    self._handle_previous_batch_request()
-
-                elif action == "emerging_threat_radar":
-                    self._handle_threat_radar(request)
-
-                elif action == "view_trending_threats":
-                    # IOManager already displayed the trending threats; loop continues
-                    pass
-
-                elif action == "history_query":
-                    # IOManager already handled the history query interactively; loop continues
-                    pass
-
-                else:
+                handler = handlers.get(action)
+                if handler is None:
                     LOGGER.warning("Unknown action received from IOManager: %s", action)
+                else:
+                    handler(request)
             except (KeyboardInterrupt, EOFError):
                 self._io._print("\n\nSession interrupted. Goodbye!")
                 LOGGER.info("Session interrupted by user during action: %s", action)
                 break
+
+    # -------------------------------------------------------------------------
+    # Action dispatch table
+    # -------------------------------------------------------------------------
+
+    def _build_action_handlers(self) -> Dict[str, Callable[[dict], None]]:
+        """Map each menu action from IOManager to the method that handles it.
+
+        To add a feature: write a _handle_* method and add one entry here
+        (or extend this mapping in a subclass). "exit" is handled by run()
+        because it ends the loop.
+        """
+        return {
+            "analyze_submission": self._handle_analyze_submission,
+            "batch_email_analysis": self._handle_batch_menu_request,
+            "previous_email_batches": (
+                lambda _request: self._handle_previous_batch_request()
+            ),
+            "emerging_threat_radar": self._handle_threat_radar,
+            # IOManager already showed these screens interactively.
+            "view_trending_threats": self._handle_already_displayed,
+            "history_query": self._handle_already_displayed,
+        }
+
+    def _handle_analyze_submission(self, request: dict) -> None:
+        """Route text to the AI text pipeline and URLs/files to VirusTotal."""
+        if request.get("input_type", "text") == "text":
+            self._handle_text_pipeline(request)
+        else:
+            self._handle_resource_pipeline(request)
+
+    @staticmethod
+    def _handle_already_displayed(request: dict) -> None:
+        """No further work: IOManager completed this action on screen."""
+        LOGGER.debug("Action handled by IOManager: %s", request.get("action"))
 
     # -------------------------------------------------------------------------
     # Pipeline: Text / Scam Message Analysis

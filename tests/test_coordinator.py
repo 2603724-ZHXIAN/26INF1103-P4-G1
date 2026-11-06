@@ -636,6 +636,83 @@ class TestRunLoopDispatch(unittest.TestCase):
         self.coord.run()  # Must not raise
 
 
+class TestActionDispatchTable(unittest.TestCase):
+    """run() is table-driven (OCP): actions are looked up, not if/elif chained."""
+
+    # Every action IOManager.collect_user_request() can return, except "exit".
+    MENU_ACTIONS = {
+        "analyze_submission",
+        "batch_email_analysis",
+        "previous_email_batches",
+        "emerging_threat_radar",
+        "view_trending_threats",
+        "history_query",
+    }
+
+    def setUp(self):
+        self.coord = _make_coordinator()
+        self.addCleanup(self.coord._data.close)
+        self.coord._io._print = lambda *a, **kw: None
+
+    def test_every_menu_action_has_a_handler(self):
+        handlers = self.coord._build_action_handlers()
+
+        self.assertEqual(set(handlers), self.MENU_ACTIONS)
+        for action, handler in handlers.items():
+            with self.subTest(action=action):
+                self.assertTrue(callable(handler))
+
+    def test_batch_action_is_dispatched_with_its_request(self):
+        request = {"action": "batch_email_analysis", "path": "emails"}
+        self.coord._io.collect_user_request = MagicMock(side_effect=[request, {"action": "exit"}])
+        self.coord._handle_batch_menu_request = MagicMock()
+
+        self.coord.run()
+
+        self.coord._handle_batch_menu_request.assert_called_once_with(request)
+
+    def test_previous_batches_action_is_dispatched(self):
+        self.coord._io.collect_user_request = MagicMock(
+            side_effect=[{"action": "previous_email_batches"}, {"action": "exit"}]
+        )
+        self.coord._handle_previous_batch_request = MagicMock()
+
+        self.coord.run()
+
+        self.coord._handle_previous_batch_request.assert_called_once_with()
+
+    def test_unknown_action_is_logged_and_the_menu_continues(self):
+        self.coord._io.collect_user_request = MagicMock(
+            side_effect=[{"action": "does_not_exist"}, {"action": "exit"}]
+        )
+
+        with self.assertLogs("src.coordinator", level="WARNING") as logs:
+            self.coord.run()
+
+        self.assertEqual(self.coord._io.collect_user_request.call_count, 2)
+        self.assertTrue(any("does_not_exist" in line for line in logs.output))
+
+    def test_new_action_can_be_added_without_changing_run(self):
+        """Open/Closed: a subclass registers a new action; run() is reused as-is."""
+        handled = []
+
+        class ExtendedCoordinator(EngineCoordinator):
+            def _build_action_handlers(self):
+                handlers = super()._build_action_handlers()
+                handlers["export_all"] = handled.append
+                return handlers
+
+        base = self.coord
+        extended = ExtendedCoordinator(base._io, base._ai, base._logic, base._data)
+        request = {"action": "export_all"}
+        base._io.collect_user_request = MagicMock(side_effect=[request, {"action": "exit"}])
+
+        extended.run()
+
+        self.assertEqual(handled, [request])
+        self.assertIs(ExtendedCoordinator.run, EngineCoordinator.run)
+
+
 class TestHelperMethods(unittest.TestCase):
     """Unit-test private helper methods in isolation."""
 
