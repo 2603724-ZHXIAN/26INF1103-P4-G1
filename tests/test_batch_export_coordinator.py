@@ -63,7 +63,7 @@ class TestBatchExportCoordinator(unittest.TestCase):
             str(Path("reports") / "BATCH-0001.docx"),
         )
 
-        io_manager._print.assert_called_with(
+        io_manager.display_message.assert_called_with(
             "Word report saved successfully: reports/BATCH-0001.docx"
         )
 
@@ -111,7 +111,7 @@ class TestBatchExportCoordinator(unittest.TestCase):
 
         mock_writer.return_value.export.assert_called_once()
 
-        io_manager._print.assert_any_call(
+        io_manager.display_message.assert_any_call(
             "Could not export Word report: Permission denied"
         )
 

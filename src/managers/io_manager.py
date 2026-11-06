@@ -225,6 +225,14 @@ class IOManager:
             except Exception:
                 print(ascii(text))
 
+    def display_message(self, text: str = "") -> None:
+        """Show a plain status or error message to the user.
+
+        Public entry point for other components (e.g. EngineCoordinator), so
+        they do not call the private _print helper directly (encapsulation).
+        """
+        self._print(text)
+
     # -------------------------------------------------------------------------
     # Static & Validation Helpers
     # -------------------------------------------------------------------------

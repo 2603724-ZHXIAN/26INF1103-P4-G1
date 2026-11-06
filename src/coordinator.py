@@ -101,7 +101,7 @@ class EngineCoordinator:
             try:
                 request = self._io.collect_user_request()
             except (KeyboardInterrupt, EOFError):
-                self._io._print("\n\nSession interrupted. Goodbye!")
+                self._io.display_message("\n\nSession interrupted. Goodbye!")
                 LOGGER.info("Session interrupted by user.")
                 break
 
@@ -111,7 +111,7 @@ class EngineCoordinator:
             # menu, so Ctrl+C / closed input must be handled for the whole action.
             try:
                 if action == "exit":
-                    self._io._print("\nThank you for using the Cyber Threat Detection Engine. Stay safe!")
+                    self._io.display_message("\nThank you for using the Cyber Threat Detection Engine. Stay safe!")
                     LOGGER.info("User selected exit.")
                     break
 
@@ -121,7 +121,7 @@ class EngineCoordinator:
                 else:
                     handler(request)
             except (KeyboardInterrupt, EOFError):
-                self._io._print("\n\nSession interrupted. Goodbye!")
+                self._io.display_message("\n\nSession interrupted. Goodbye!")
                 LOGGER.info("Session interrupted by user during action: %s", action)
                 break
 
@@ -184,7 +184,7 @@ class EngineCoordinator:
         if result["success"]:
             self._io.display_assessment(submission)
         else:
-            self._io._print(
+            self._io.display_message(
                 f"\n[Analysis] {result['error']}"
             )
 
@@ -420,7 +420,7 @@ class EngineCoordinator:
                     )
 
                     if batch_info is None:
-                        self._io._print("Batch not found.")
+                        self._io.display_message("Batch not found.")
                         continue
 
                     batch_id = batch_info["batch_id"]
@@ -439,7 +439,7 @@ class EngineCoordinator:
                     writer = WordReportWriter()
                     saved_path = writer.export(report, str(output_file))
 
-                    self._io._print(
+                    self._io.display_message(
                         f"Word report saved successfully: {saved_path}"
                     )
                     continue
@@ -458,7 +458,7 @@ class EngineCoordinator:
                     )
 
                     if details is None:
-                        self._io._print(
+                        self._io.display_message(
                             "The selected email is unavailable."
                         )
                         continue
@@ -474,22 +474,22 @@ class EngineCoordinator:
                 )
 
                 LOGGER.exception("Could not %s.", action)
-                self._io._print(f"Could not {action}: {error}")
+                self._io.display_message(f"Could not {action}: {error}")
 
     def _handle_batch_menu_request(self, request: dict) -> None:
         """Process a batch and display its saved summary."""
         try:
-            self._io._print(
+            self._io.display_message(
                 "Importing and analysing emails. Please wait..."
             )
 
             result = self._handle_batch_pipeline(request)
 
             if not result["status_saved"]:
-                self._io._print(
+                self._io.display_message(
                     "The final batch status could not be saved."
                 )
-                self._io._print(
+                self._io.display_message(
                     f"Reason: {result['status_error']}"
                 )
 
@@ -500,19 +500,19 @@ class EngineCoordinator:
                     self._review_email_batch(batch)
                     break
             else:
-                self._io._print(
+                self._io.display_message(
                     "The saved batch summary could not be retrieved."
                 )
 
             if result["unprocessed_count"]:
-                self._io._print(
+                self._io.display_message(
                     f"Emails not processed: "
                     f"{result['unprocessed_count']}"
                 )
 
         except (DataManagerError, ValueError, RuntimeError) as error:
             LOGGER.exception("Batch processing failed.")
-            self._io._print(f"Batch processing failed: {error}")
+            self._io.display_message(f"Batch processing failed: {error}")
 
     def _handle_previous_batch_request(self) -> None:
         """Load previous batches and display the selected summary."""
@@ -528,11 +528,11 @@ class EngineCoordinator:
                     self._review_email_batch(batch)
                     return
 
-            self._io._print("The selected batch is unavailable.")
+            self._io.display_message("The selected batch is unavailable.")
 
         except (DataManagerError, ValueError) as error:
             LOGGER.exception("Loading previous batches failed.")
-            self._io._print(
+            self._io.display_message(
                 f"Could not load previous batches: {error}"
             )
 
@@ -852,7 +852,7 @@ class EngineCoordinator:
             submission.submission_id = submission_id
         except DataManagerError as db_err:
             LOGGER.error("Failed to persist initial submission: %s", db_err)
-            self._io._print(f"\n[Database] Could not save submission: {db_err}")
+            self._io.display_message(f"\n[Database] Could not save submission: {db_err}")
             return
 
         # Step 2: Mark processing
@@ -865,7 +865,7 @@ class EngineCoordinator:
             LOGGER.error(error_msg)
             submission.mark_failed(error_msg)
             self._safe_update_submission(submission)
-            self._io._print(f"\n[Scanner] {error_msg}")
+            self._io.display_message(f"\n[Scanner] {error_msg}")
             return
 
         scan_target = file_path if (input_type == "file" and file_path) else input_value
@@ -885,7 +885,7 @@ class EngineCoordinator:
             LOGGER.error("Scanner failed for submission #%d: %s", submission_id, error_msg)
             submission.mark_failed(error_msg)
             self._safe_update_submission(submission)
-            self._io._print(f"\n[Scanner] Scan failed: {error_msg}")
+            self._io.display_message(f"\n[Scanner] Scan failed: {error_msg}")
             return
 
         parsed_result = vt_result.get("parsed_result", {})
@@ -916,7 +916,7 @@ class EngineCoordinator:
             LOGGER.error("AIManager failed for submission #%d: %s", submission_id, error_msg)
             submission.mark_failed(error_msg)
             self._safe_update_submission(submission)
-            self._io._print(f"\n[AI Analysis] Analysis failed: {error_msg}")
+            self._io.display_message(f"\n[AI Analysis] Analysis failed: {error_msg}")
             return
 
         # Step 7: Business rule evaluation using VT data AND the AI verdict
@@ -926,7 +926,7 @@ class EngineCoordinator:
             LOGGER.error("LogicManager failed for submission #%d: %s", submission_id, logic_err)
             submission.mark_failed(str(logic_err))
             self._safe_update_submission(submission)
-            self._io._print(f"\n[Risk Analysis] Risk evaluation failed: {logic_err}")
+            self._io.display_message(f"\n[Risk Analysis] Risk evaluation failed: {logic_err}")
             return
 
         # Step 8: Attach the AI's educational guidance from the same response
@@ -977,7 +977,7 @@ class EngineCoordinator:
             )
             self._safe_update_submission(submission)
 
-            self._io._print(
+            self._io.display_message(
                 "\n[Database] Results could not be saved completely. "
                 "This submission has not completed successfully."
             )
@@ -1000,8 +1000,7 @@ class EngineCoordinator:
         Steps:
         1. Extract topic from request dict (may be None for broad scan).
         2. Call AIManager.fetch_emerging_radar(topic).
-        3. Display result via IOManager.display_threat_radar() if available,
-           else fallback to a plain-text summary print.
+        3. Display the result via IOManager.display_threat_radar().
         """
         topic: Optional[str] = request.get("topic")
         LOGGER.info("Fetching emerging threat radar. Topic: %s", topic or "(all)")
@@ -1014,29 +1013,10 @@ class EngineCoordinator:
                 if isinstance(radar_result, dict)
                 else "Radar returned an invalid response."
             )
-            self._io._print(f"\n[Threat Radar] Could not fetch threat intelligence: {error_msg}")
+            self._io.display_message(f"\n[Threat Radar] Could not fetch threat intelligence: {error_msg}")
             return
 
-        if hasattr(self._io, "display_threat_radar"):
-            try:
-                self._io.display_threat_radar(radar_result, topic=topic)
-            except TypeError:
-                self._io.display_threat_radar(radar_result)
-        else:
-            # Graceful fallback if IOManager lacks the display method
-            content = radar_result.get("content", "No content available.")
-            sources = radar_result.get("sources", [])
-            self._io._print("\n" + "=" * 72)
-            self._io._print("🌐  EMERGING THREAT RADAR REPORT")
-            self._io._print("=" * 72)
-            self._io._print(content)
-            if sources:
-                self._io._print("\nSources:")
-                for src in sources:
-                    title = src.get("title", "Unnamed source")
-                    url = src.get("url", "")
-                    self._io._print(f"  • {title}: {url}")
-            self._io._print("=" * 72)
+        self._io.display_threat_radar(radar_result, topic=topic)
 
     # -------------------------------------------------------------------------
     # Private Helpers

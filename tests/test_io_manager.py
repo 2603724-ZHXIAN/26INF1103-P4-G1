@@ -79,6 +79,32 @@ class TestIOManagerEncapsulation(unittest.TestCase):
             self.io.data_manager = None
 
 
+class TestIOManagerPublicMessages(unittest.TestCase):
+    """Other components show messages through the public display_message()."""
+
+    def setUp(self):
+        self.io = IOManager(use_color=False)
+
+    def test_display_message_prints_the_text(self):
+        with patch("sys.stdout", new_callable=io.StringIO) as out:
+            self.io.display_message("Batch not found.")
+
+        self.assertEqual(out.getvalue(), "Batch not found.\n")
+
+    def test_display_message_without_text_prints_a_blank_line(self):
+        with patch("sys.stdout", new_callable=io.StringIO) as out:
+            self.io.display_message()
+
+        self.assertEqual(out.getvalue(), "\n")
+
+    def test_coordinator_does_not_use_the_private_print_helper(self):
+        """Encapsulation: the coordinator must not reach into IOManager._print."""
+        import inspect
+        from src import coordinator
+
+        self.assertNotIn("_io._print", inspect.getsource(coordinator))
+
+
 class TestIOManagerValidationAndHelpers(unittest.TestCase):
     """Test URL validation, cryptographic hashing, and label formatting."""
 

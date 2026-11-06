@@ -1237,7 +1237,7 @@ class TestConcurrentBatchCoordinator(unittest.TestCase):
             self.fail("Ctrl+C escaped run(): the batch review menu crashed the app.")
 
         io.collect_batch_review_request.assert_called()
-        printed = " ".join(str(call.args[0]) for call in io._print.call_args_list if call.args)
+        printed = " ".join(str(call.args[0]) for call in io.display_message.call_args_list if call.args)
         self.assertIn("Goodbye", printed)
 
 
