@@ -1,0 +1,12 @@
+From: Account Support <support@example.com>
+To: recipient@example.com
+Subject: Account verification
+MIME-Version: 1.0
+Content-Type: text/html; charset=utf-8
+
+<html>
+<body>
+<p>Please verify your account.</p>
+<a href="https://example.com/verify">Verify account</a>
+</body>
+</html>
