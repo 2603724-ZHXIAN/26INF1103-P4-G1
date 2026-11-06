@@ -1154,7 +1154,7 @@ class TestConcurrentBatchCoordinator(unittest.TestCase):
             scanner=None,
             ingestion_service=self.ingestion,
             batch_processor=BatchProcessor(
-                self.ai, self.logic, RateLimiter(max_calls=100, time_window=60), max_workers=3
+                self.ai, RateLimiter(max_calls=100, time_window=60), max_workers=3
             ),
         )
 
@@ -1188,6 +1188,45 @@ class TestConcurrentBatchCoordinator(unittest.TestCase):
         result = self._run_batch()
         self.assertEqual(result["successful_count"], 3)
         self.assertEqual([status for status, _ in self._saved_statuses()], ["completed"] * 3)
+
+    def test_each_email_is_sent_to_the_ai_only_once(self):
+        """Workers ask the AI; the shared pipeline reuses that answer."""
+        self.ai.analyze_message.side_effect = self._answer_with("no-match", {})
+        result = self._run_batch()
+        self.assertEqual(self.ai.analyze_message.call_count, 3)
+        self.assertEqual(
+            [entry["item_id"] for entry in result["results"]],
+            ["EMAIL-001", "EMAIL-002", "EMAIL-003"],
+        )
+
+    def test_threaded_and_sequential_batches_save_the_same_records(self):
+        """Both modes use one pipeline, so they store identical evidence and risk."""
+        risky = TestBatchCoordinator._make_batch_response()
+        risky["indicators"]["credential_request"] = {"present": True, "evidence": "Enter your password"}
+        risky["indicators"]["suspicious_link"] = {"present": True, "evidence": "http://fake.example"}
+        self.ai.analyze_message.side_effect = lambda text, **kwargs: copy.deepcopy(risky)
+        self._run_batch()
+        threaded = self._saved_assessments()
+
+        self.coord._batch_processor = None
+        self._run_batch()
+        sequential = self._saved_assessments()[len(threaded):]
+
+        self.assertEqual(threaded, [("high", 2)] * 3)
+        self.assertEqual(sequential, threaded)
+
+    def _saved_assessments(self):
+        import sqlite3
+        from contextlib import closing
+        with closing(sqlite3.connect(self.database_path)) as connection:
+            return connection.execute(
+                """SELECT fa.risk_category,
+                          (SELECT COUNT(*) FROM detection_evidence de
+                           WHERE de.submission_id = s.submission_id)
+                   FROM submission s
+                   JOIN final_assessment fa ON fa.submission_id = s.submission_id
+                   ORDER BY s.submission_id"""
+            ).fetchall()
 
     def test_ai_error_is_saved_as_failed_record(self):
         self.ai.analyze_message.side_effect = self._answer_with(

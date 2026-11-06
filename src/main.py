@@ -95,18 +95,17 @@ def main() -> None:
 
     logic_manager = LogicManager()
 
-    # --- Coordinator (Composition + Aggregation) ----------------------------
-    
+    # --- Concurrent batch processing ---------------------------------------
     rate_limiter = RateLimiter(max_calls=15, time_window=60)
-
-   
-
     batch_processor = BatchProcessor(
         ai_manager=ai_manager,
-        logic_manager=logic_manager,
         rate_limiter=rate_limiter,
-        max_workers=5
+        max_workers=5,
     )
+
+    # --- Coordinator --------------------------------------------------------
+    # main.py is the composition root: it creates every object and injects
+    # them into the coordinator, which aggregates (uses but does not own) them.
 
     coordinator = EngineCoordinator(
         io_manager=io_manager,
