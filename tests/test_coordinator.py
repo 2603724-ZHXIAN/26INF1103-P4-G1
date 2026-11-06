@@ -1025,5 +1025,101 @@ class TestBatchCoordinator(unittest.TestCase):
             "processing",
         )
 
+
+class TestConcurrentBatchCoordinator(unittest.TestCase):
+    """Batch pipeline with the threaded BatchProcessor injected (no live APIs)."""
+
+    def setUp(self):
+        from src.batch.batch_processor import BatchProcessor
+        from src.batch.rate_limiter import RateLimiter
+
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.database_path = Path(self.temp.name) / "concurrent_batch.db"
+        self.data = DataManager(db_path=str(self.database_path))
+        self.addCleanup(self.data.close)
+        self.data.initialize_database()
+
+        self.ai = MagicMock()
+        self.ai.llm_client.model_name = "offline-test-model"
+        self.logic = LogicManager()
+        self.ingestion = MagicMock()
+        self.ingestion.ingest_paths.return_value = {
+            "accepted": [
+                TestBatchCoordinator._make_email("EMAIL-001", "First email", "First message body."),
+                TestBatchCoordinator._make_email("EMAIL-002", "Second email", "Second message body."),
+                TestBatchCoordinator._make_email("EMAIL-003", "Third email", "Third message body."),
+            ],
+            "issues": [],
+        }
+        self.coord = EngineCoordinator(
+            io_manager=MagicMock(),
+            ai_manager=self.ai,
+            logic_manager=self.logic,
+            data_manager=self.data,
+            scanner=None,
+            ingestion_service=self.ingestion,
+            batch_processor=BatchProcessor(
+                self.ai, self.logic, RateLimiter(max_calls=100, time_window=60), max_workers=3
+            ),
+        )
+
+    def _answer_with(self, bad_for, bad_answer):
+        """Fake AI: return bad_answer for the email whose body contains bad_for."""
+        def fake_analyze(text, **kwargs):
+            if bad_for in text:
+                return copy.deepcopy(bad_answer)
+            return TestBatchCoordinator._make_batch_response()
+        return fake_analyze
+
+    def _run_batch(self):
+        return self.coord._handle_batch_pipeline(
+            {"action": "batch_email_analysis", "paths": ["test_emails"]}
+        )
+
+    def _saved_statuses(self):
+        import sqlite3
+        with sqlite3.connect(self.database_path) as connection:
+            return sorted(
+                connection.execute(
+                    "SELECT processing_status, COALESCE(error_message, '') FROM submission"
+                ).fetchall()
+            )
+
+    def test_all_emails_completed_and_saved(self):
+        self.ai.analyze_message.side_effect = self._answer_with("no-match", {})
+        result = self._run_batch()
+        self.assertEqual(result["successful_count"], 3)
+        self.assertEqual([status for status, _ in self._saved_statuses()], ["completed"] * 3)
+
+    def test_ai_error_is_saved_as_failed_record(self):
+        self.ai.analyze_message.side_effect = self._answer_with(
+            "Second message body", {"error": "Simulated API quota exceeded."}
+        )
+        result = self._run_batch()
+        self.assertEqual(result["successful_count"], 2)
+        self.assertEqual(result["analysis_failed_count"], 1)
+        statuses = self._saved_statuses()
+        self.assertEqual([status for status, _ in statuses], ["completed", "completed", "failed"])
+        self.assertIn("quota exceeded", statuses[-1][1])
+
+    def test_invalid_ai_result_fails_only_that_email(self):
+        """A warning sign flagged without evidence must not stop the whole batch (bug B1)."""
+        bad = TestBatchCoordinator._make_batch_response()
+        bad["indicators"]["credential_request"] = {"present": True, "evidence": ""}
+        self.ai.analyze_message.side_effect = self._answer_with("Second message body", bad)
+
+        result = self._run_batch()  # must not raise
+
+        self.assertEqual(len(result["results"]), 3)
+        self.assertEqual(result["successful_count"], 2)
+        self.assertEqual(result["analysis_failed_count"], 1)
+        self.assertEqual(result["processing_status"], "partially_failed")
+        statuses = self._saved_statuses()
+        self.assertEqual([status for status, _ in statuses], ["completed", "completed", "failed"])
+        self.assertIn("invalid warning indicators", statuses[-1][1])
+        self.assertNotIn("pending", [status for status, _ in statuses])
+
+
 if __name__ == "__main__":
     unittest.main()

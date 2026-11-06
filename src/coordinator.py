@@ -558,6 +558,7 @@ class EngineCoordinator:
                     "database_error": False,
                     "item_id": item.item_id
                 }
+                submission = None
                 try:
                     if item.status == "completed" and item.ai_result is not None:
                         submission = Submission(
@@ -633,6 +634,19 @@ class EngineCoordinator:
                 except DataManagerError:
                     LOGGER.exception("Database persistence failed for item %s", item.item_id)
                     result_dict["database_error"] = True
+                except (ValueError, TypeError) as error:
+                    # The AI result could not be assessed (e.g. a warning sign was
+                    # flagged without evidence). Fail only this email and continue
+                    # with the rest of the batch instead of stopping it.
+                    LOGGER.exception("Assessment failed for item %s", item.item_id)
+                    result_dict["error"] = str(error)
+                    if submission is not None and submission.submission_id is not None:
+                        try:
+                            submission.mark_failed(str(error))
+                            self._data.save_submission(submission)
+                        except DataManagerError:
+                            LOGGER.exception("Could not save failure for item %s", item.item_id)
+                            result_dict["database_error"] = True
                 
                 results.append(result_dict)
                 if result_dict["database_error"]:
