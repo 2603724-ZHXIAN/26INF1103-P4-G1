@@ -15,3 +15,12 @@ class BatchProcessor:
         self._rate_limiter = rate_limiter
         self._max_workers = max_workers
         self._cancel_event = threading.Event()
+
+    def process_batch(self, items: typing.List[BatchItem]) -> typing.List[BatchItem]:
+        results = []
+        with ThreadPoolExecutor(max_workers=self._max_workers) as executor:
+            futures = [executor.submit(self._worker_task, item) for item in items]
+
+            for future in futures:
+                results.append(future.result())
+        return results
