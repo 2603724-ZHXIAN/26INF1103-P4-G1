@@ -1,0 +1,12 @@
+From: Notice <security-team@example.invalid>
+To: demo-recipient4@example.invalid
+Subject: Urgent bank account security alert
+Date: Fri, 06 Nov 2026 10:04:00 +0800
+Message-ID: <campaign-demo-4@example.invalid>
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+MIME-Version: 1.0
+
+We detected an unusual sign-in to your online banking profile. Your account m=
+ay be temporarily restricted. Do not reply to this message. Contact your bank=
+ using the official phone number on your bank card to verify this notice.

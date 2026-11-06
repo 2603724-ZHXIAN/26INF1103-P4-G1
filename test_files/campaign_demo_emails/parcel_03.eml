@@ -1,0 +1,12 @@
+From: Notice <delivery-alert3@example.invalid>
+To: demo-recipient3@example.invalid
+Subject: Parcel delivery pending - final notice
+Date: Fri, 06 Nov 2026 10:03:00 +0800
+Message-ID: <campaign-demo-3@example.invalid>
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+MIME-Version: 1.0
+
+Your parcel is on hold. Please pay a small delivery fee immediately to arrang=
+e redelivery. Visit https://parcel-check.example.invalid/verify to complete p=
+ayment. Final notice: action is required.
