@@ -210,6 +210,15 @@ class WordReportWriter:
 
         document.add_heading("Potential Scam Campaigns", level=1)
 
+        document.add_paragraph(
+            "Emails with at least 75% text similarity are grouped "
+            "to identify potential scam campaigns. Only groups "
+            "containing two or more successfully analysed emails "
+            "are displayed. These groups suggest similar scam "
+            "patterns but do not confirm that the emails originate "
+            "from the same attacker."
+        )
+
         campaign_groups = [
             group
             for group in report.get_campaign_groups()
