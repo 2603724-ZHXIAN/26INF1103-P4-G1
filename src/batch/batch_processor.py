@@ -1,5 +1,6 @@
 import typing
 import threading
+from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from src.batch.batch_item import BatchItem
 from src.batch.rate_limiter import RateLimiter  
@@ -22,14 +23,17 @@ class BatchProcessor:
         results = []
         with ThreadPoolExecutor(max_workers=self._max_workers) as executor:
             future_to_item = {executor.submit(self._worker_task, item): item for item in items}
-            for future in as_completed(future_to_item):
-                try:
-                    res_item = future.result()
-                    results.append(res_item)
-                except Exception as exc:
-                    item = future_to_item[future]
-                    item.mark_failed(str(exc))
-                    results.append(item)
+            with tqdm(total=len(items), desc="Analyzing Emails") as pbar:
+                for future in as_completed(future_to_item):
+                    try:
+                        res_item = future.result()
+                        results.append(res_item)
+                    except Exception as exc:
+                        item = future_to_item[future]
+                        item.mark_failed(str(exc))
+                        results.append(item)
+                    finally:
+                        pbar.update(1)
         return results
 
 
@@ -37,7 +41,7 @@ class BatchProcessor:
         thread_name = threading.current_thread().name
         
         with self._print_lock:
-            print(f"Worker {thread_name} started processing email {item.item_id}")
+            tqdm.write(f"Worker {thread_name} started processing email {item.item_id}")
 
         if self._cancel_event.is_set():
             item.mark_failed("Task cancelled")
@@ -61,7 +65,7 @@ class BatchProcessor:
             item.mark_failed(str(e))
 
         with self._print_lock:
-            print(f"Worker {thread_name} finished processing email {item.item_id}")
+            tqdm.write(f"Worker {thread_name} finished processing email {item.item_id}")
 
         return item
 
