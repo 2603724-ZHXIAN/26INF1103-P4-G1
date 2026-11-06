@@ -1,4 +1,5 @@
 from pathlib import Path
+from unittest import result
 from docx import Document
 
 from src.batch.batch_report import BatchReport
@@ -25,6 +26,8 @@ class WordReportWriter:
 
         self._add_executive_summary(document, summary)
         self._add_summary_section(document, summary)
+        self._add_import_summary(document, summary)
+        self._add_import_issues_section(document, report)
 
        
         # Risk Distribution
@@ -76,6 +79,69 @@ class WordReportWriter:
         document.add_paragraph(
             f"Failed: {summary['failed']}"
         )
+
+    def _add_import_summary(self, document, summary: dict) -> None:
+        """Display the batch's saved email import statistics."""
+
+        document.add_heading("Batch Import Summary", level=1)
+
+        table = document.add_table(rows=1, cols=2)
+        table.style = "Table Grid"
+
+        header = table.rows[0].cells
+        header[0].text = "Import Status"
+        header[1].text = "Count"
+
+        import_statistics = [
+            ("Uploaded Files", summary["uploaded_files"]),
+            ("Accepted Emails", summary["accepted_emails"]),
+            ("Duplicate Files", summary["duplicate_files"]),
+            ("Failed Imports", summary["failed_imports"]),
+        ]
+
+        for status, count in import_statistics:
+            cells = table.add_row().cells
+            cells[0].text = status
+            cells[1].text = str(count)
+
+        self._style_table(table)
+
+    def _add_import_issues_section(self, document, report: BatchReport) -> None:
+        """Display duplicate files and failed imports saved for this batch."""
+
+        document.add_heading(
+            "Emails Not Scanned — Duplicates and Failed Imports",
+            level=1
+        )
+
+        issues = report.import_issues
+
+        if not issues:
+            document.add_paragraph(
+                "No duplicate files or failed imports were recorded."
+            )
+            return
+
+        table = document.add_table(rows=1, cols=4)
+        table.style = "Table Grid"
+
+        headers = table.rows[0].cells
+        headers[0].text = "Email Reference"
+        headers[1].text = "Filename"
+        headers[2].text = "Status"
+        headers[3].text = "Reason"
+
+        for issue in issues:
+            cells = table.add_row().cells
+
+            cells[0].text = str(issue.get("item_id") or "N/A")
+            cells[1].text = str(issue.get("source_path") or "Unknown")
+            cells[2].text = str(issue.get("kind") or "Unknown")
+            cells[3].text = str(issue.get("message") or "Not provided")
+
+        self._style_table(table)
+
+
 
     def _add_risk_section(
         self, document, report: BatchReport, summary: dict
@@ -144,6 +210,15 @@ class WordReportWriter:
 
         document.add_heading("Potential Scam Campaigns", level=1)
 
+        document.add_paragraph(
+            "Emails with at least 75% text similarity are grouped "
+            "to identify potential scam campaigns. Only groups "
+            "containing two or more successfully analysed emails "
+            "are displayed. These groups suggest similar scam "
+            "patterns but do not confirm that the emails originate "
+            "from the same attacker."
+        )
+
         campaign_groups = [
             group
             for group in report.get_campaign_groups()
@@ -160,7 +235,7 @@ class WordReportWriter:
         headers = [
             "Campaign",
             "Emails",
-            "Submission IDs",
+            "Email IDs",
             "Common Threat",
         ]
 
@@ -173,9 +248,22 @@ class WordReportWriter:
             cells[0].text = f"Group {index}"
             cells[1].text = str(group["count"])
 
+            # Map internal submission IDs to user-facing Email IDs.
+            email_id_lookup = {
+                record["submission_id"]: record.get("email_id") or "Unavailable"
+                for record in report.email_records
+                if record.get("submission_id") is not None
+            }
+
             submission_ids = group["submission_ids"]
-            visible_ids = submission_ids[:3]
-            remaining = len(submission_ids) - len(visible_ids)
+
+            email_ids = [
+                email_id_lookup.get(submission_id, "Unavailable")
+                for submission_id in submission_ids
+            ]
+
+            visible_ids = email_ids[:3]
+            remaining = len(email_ids) - len(visible_ids)
 
             id_text = ", ".join(str(item) for item in visible_ids)
 
@@ -214,7 +302,7 @@ class WordReportWriter:
             return
 
         for result in ranked_results:
-            submission_id = result.get("submission_id")
+            email_id = result.get("email_id") or "Unavailable"
             risk_level = result.get("overall_risk") or "Unknown"
             threat_type = result.get("primary_threat_type")
             threat_summary = result.get("threat_summary")
@@ -222,7 +310,7 @@ class WordReportWriter:
             risk_reasons = result.get("risk_reasons") or []
 
             document.add_heading(
-                f"Submission #{submission_id}",
+                f"Email ID: {email_id}",
                 level=2
             )
 
@@ -279,12 +367,12 @@ class WordReportWriter:
             failed_table.style = "Table Grid"
 
             header = failed_table.rows[0].cells
-            header[0].text = "Submission ID"
+            header[0].text = "Email ID"
             header[1].text = "Error Message"
 
             for record in failed_records:
                 cells = failed_table.add_row().cells
-                cells[0].text = str(record.get("submission_id") or "Unknown")
+                cells[0].text = str(record.get("email_id") or "Unavailable")
                 cells[1].text = str(
                     record.get("error_message") or "No error details available"
                 )
@@ -329,7 +417,9 @@ class WordReportWriter:
                 }
 
             group = grouped_guidance[threat_type]
-            group["submission_ids"].append(record.get("submission_id"))
+            group["submission_ids"].append(
+                record.get("email_id") or "Unavailable"
+            )
 
             if threat_summary and threat_summary not in group["summaries"]:
                 group["summaries"].append(threat_summary)
@@ -368,7 +458,7 @@ class WordReportWriter:
             if remaining > 0:
                 id_text += f" +{remaining} more"
 
-            document.add_paragraph(f"Submissions: {id_text}")
+            document.add_paragraph(f"Email IDs: {id_text}")
 
             sections = [
                 ("Threat Summaries", group["summaries"]),
@@ -539,7 +629,7 @@ class WordReportWriter:
             risk = record.get("overall_risk")
             threat = record.get("primary_threat_type")
 
-            row[0].text = str(record.get("submission_id", "—"))
+            row[0].text = str(record.get("email_id") or "Unavailable")
 
             if status == "failed":
                 row[1].text = "Failed"

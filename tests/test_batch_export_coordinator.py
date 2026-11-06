@@ -7,10 +7,11 @@ from pathlib import Path
 
 class TestBatchExportCoordinator(unittest.TestCase):
 
+    @patch("src.coordinator.Path.exists", return_value=False)
     @patch("src.coordinator.WordReportWriter")
     @patch("src.coordinator.BatchReportService")
     def test_option_four_exports_word_report(
-        self, mock_report_service, mock_writer
+        self, mock_report_service, mock_writer, mock_exists
     ):
         io_manager = Mock()
         ai_manager = Mock()
@@ -28,6 +29,13 @@ class TestBatchExportCoordinator(unittest.TestCase):
 
         data_manager.search_batch_emails.return_value = []
 
+        data_manager.list_email_batches.return_value = [
+            {
+                "batch_id": 1,
+                "batch_reference": "BATCH-001",
+            }
+        ]
+
         io_manager.collect_batch_review_request.side_effect = [
             {"choice": "4"},
             {"choice": "0"},
@@ -39,7 +47,7 @@ class TestBatchExportCoordinator(unittest.TestCase):
         )
 
         mock_writer.return_value.export.return_value = (
-            "reports/BATCH-001.docx"
+            "reports/BATCH-0001.docx"
         )
 
         coordinator._review_email_batch(batch)
@@ -52,11 +60,11 @@ class TestBatchExportCoordinator(unittest.TestCase):
 
         mock_writer.return_value.export.assert_called_once_with(
             fake_report,
-            str(Path("reports") / "BATCH-001.docx"),
+            str(Path("reports") / "BATCH-0001.docx"),
         )
 
         io_manager._print.assert_called_with(
-            "Word report saved successfully: reports/BATCH-001.docx"
+            "Word report saved successfully: reports/BATCH-0001.docx"
         )
 
 
@@ -80,6 +88,13 @@ class TestBatchExportCoordinator(unittest.TestCase):
         batch = {"batch_reference": "BATCH-001"}
 
         data_manager.search_batch_emails.return_value = []
+
+        data_manager.list_email_batches.return_value = [
+            {
+                "batch_id": 1,
+                "batch_reference": "BATCH-001",
+            }
+        ]
 
         io_manager.collect_batch_review_request.side_effect = [
             {"choice": "4"},

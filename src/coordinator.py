@@ -380,11 +380,35 @@ class EngineCoordinator:
                     report_service = BatchReportService(self._data)
                     report = report_service.build_report(reference)
 
-                    safe_reference = re.sub(r"[^A-Za-z0-9_-]", "_", reference)
-                    output_path = str(Path("reports") / f"{safe_reference}.docx")
+                    batches = self._data.list_email_batches()
+
+                    batch_info = next(
+                        (
+                            batch for batch in batches
+                            if batch["batch_reference"] == reference
+                        ),
+                        None
+                    )
+
+                    if batch_info is None:
+                        self._io._print("Batch not found.")
+                        continue
+
+                    batch_id = batch_info["batch_id"]
+
+                    report_dir = Path("reports")
+                    report_dir.mkdir(parents=True, exist_ok=True)
+
+                    output_file = report_dir / f"BATCH-{batch_id:04d}.docx"
+
+                    # Avoid overwriting an existing report.
+                    counter = 2
+                    while output_file.exists():
+                        output_file = report_dir / f"BATCH-{batch_id:04d}_{counter}.docx"
+                        counter += 1
 
                     writer = WordReportWriter()
-                    saved_path = writer.export(report, output_path)
+                    saved_path = writer.export(report, str(output_file))
 
                     self._io._print(
                         f"Word report saved successfully: {saved_path}"

@@ -108,6 +108,10 @@ class TestBatchDatabaseIntegration(unittest.TestCase):
             report.generate_summary(),
             {
                 "batch_reference": self.batch_reference,
+                "uploaded_files": 5,
+                "accepted_emails": 5,
+                "duplicate_files": 0,
+                "failed_imports": 0,
                 "total_emails": 5,
                 "completed": 4,
                 "failed": 1,

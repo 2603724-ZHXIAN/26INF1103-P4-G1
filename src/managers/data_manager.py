@@ -761,10 +761,14 @@ class DataManager:
 
             rows = connection.execute(
                 """
-                SELECT *
-                FROM submission
-                WHERE dataset_batch = ?
-                ORDER BY submission_id
+                SELECT
+                    s.*,
+                    em.item_id AS email_id
+                FROM submission AS s
+                LEFT JOIN email_metadata AS em
+                    ON s.submission_id = em.submission_id
+                WHERE s.dataset_batch = ?
+                ORDER BY s.submission_id
                 """,
                 (batch_reference,),
             ).fetchall()

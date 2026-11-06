@@ -54,6 +54,9 @@ class TestWordReportWriter(unittest.TestCase):
                 "error_message": "AI provider timeout",
             },
         ]
+        # Add Email IDs to all three sample records
+        for index, record in enumerate(self.email_records, start=1):
+            record["email_id"] = f"EMAIL-{index:03d}"
 
         self.report = BatchReport(
             self.batch_info,
@@ -117,7 +120,7 @@ class TestWordReportWriter(unittest.TestCase):
         self.assertIn("Prioritised High-Risk Emails", text)
 
         # Verify the high-risk submission is displayed.
-        self.assertIn("Submission #101", text)
+        self.assertIn("Email ID: EMAIL-001", text)
         self.assertIn("Risk Level: High", text)
         self.assertIn("Risk Level: High", text)
         self.assertNotIn("Risk Score:", text)
@@ -149,7 +152,7 @@ class TestWordReportWriter(unittest.TestCase):
 
         self.assertEqual(cells[0].text, "Group 1")
         self.assertEqual(cells[1].text, "2")
-        self.assertEqual(cells[2].text, "101, 102")
+        self.assertEqual(cells[2].text, "EMAIL-001, EMAIL-002")
         self.assertEqual(cells[3].text, "Phishing")
         
     def test_campaign_section_excludes_single_emails(self):
@@ -184,7 +187,7 @@ class TestWordReportWriter(unittest.TestCase):
 
         self.assertIn("Failed Email Analyses", text)
         self.assertIn("AI provider timeout", text)
-        self.assertIn("103", text)
+        self.assertIn("EMAIL-003", text)
 
     def test_educational_guidance(self):
         document = self._generate_document()
@@ -259,6 +262,9 @@ class TestWordReportWriter(unittest.TestCase):
                 "error_message": "AI provider timeout",
             })
 
+        # Give all 100 test emails realistic email references.
+        for index, record in enumerate(records, start=1):
+            record["email_id"] = f"EMAIL-{index:03d}"
     
         # Add sample educational guidance to completed emails.
         for record in records:
@@ -291,11 +297,6 @@ class TestWordReportWriter(unittest.TestCase):
         report = BatchReport(batch_info, records)
         self.writer.export(report, self.output_path)
 
-        self.writer.export(
-            report,
-            "reports/batch_100_email_preview.docx"
-        )
-
         document = Document(self.output_path)
         text = self._document_text(document)
 
@@ -303,11 +304,11 @@ class TestWordReportWriter(unittest.TestCase):
         self.assertIn("100 emails submitted", text)
         self.assertIn("94 successfully analysed", text)
 
-        # Check top-10 limit.
+        # Check that only 10 high-risk emails receive detailed headings.
         self.assertEqual(
             sum(
                 1 for paragraph in document.paragraphs
-                if paragraph.text.startswith("Submission #")
+                if paragraph.text.startswith("Email ID: EMAIL-")
             ),
             10,
         )
@@ -337,7 +338,7 @@ class TestWordReportWriter(unittest.TestCase):
         self.assertEqual(len(set(ids)), 100)
 
         # Highest-risk email comes first.
-        self.assertEqual(ids[0], "1001")
+        self.assertEqual(ids[0], "EMAIL-001")
 
         # Failed emails are still included.
         failed_rows = [
@@ -346,6 +347,51 @@ class TestWordReportWriter(unittest.TestCase):
         ]
 
         self.assertEqual(len(failed_rows), 6)
+
+    def test_word_report_displays_import_statistics(self):
+        """Verify the Word report displays saved batch import counts."""
+
+        batch_info = {
+            "batch_reference": "BATCH-0001",
+            "total_files": 4,
+            "accepted_count": 2,
+            "duplicate_count": 1,
+            "import_failed_count": 1,
+            "saved_email_count": 2,
+            "completed_count": 2,
+            "analysis_failed_count": 0,
+            "high_risk_count": 2,
+            "medium_risk_count": 0,
+            "low_risk_count": 0,
+        }
+
+        report = BatchReport(batch_info, [])
+
+        self.writer.export(report, self.output_path)
+
+        document = Document(self.output_path)
+
+        # Find the Import Summary table.
+        matching_tables = [
+            table for table in document.tables
+            if table.rows
+            and table.rows[0].cells[0].text == "Import Status"
+            and table.rows[0].cells[1].text == "Count"
+        ]
+
+        self.assertEqual(len(matching_tables), 1)
+
+        import_table = matching_tables[0]
+
+        actual_counts = {
+            row.cells[0].text: row.cells[1].text
+            for row in import_table.rows[1:]
+        }
+
+        self.assertEqual(actual_counts["Uploaded Files"], "4")
+        self.assertEqual(actual_counts["Accepted Emails"], "2")
+        self.assertEqual(actual_counts["Duplicate Files"], "1")
+        self.assertEqual(actual_counts["Failed Imports"], "1")
 
 
     def test_guidance_groups_duplicate_advice(self):
@@ -433,7 +479,78 @@ class TestWordReportWriter(unittest.TestCase):
             guidance_paragraphs,
         )
 
+    def test_word_report_displays_import_issues(self):
+        """Verify duplicate and failed-import details appear in Word."""
 
+        batch_info = {
+            "batch_reference": "BATCH-005",
+            "saved_email_count": 0,
+            "completed_count": 0,
+            "analysis_failed_count": 0,
+        }
+
+        import_issues = [
+            {
+                "item_id": "EMAIL-003",
+                "source_path": "first_copy.eml",
+                "kind": "duplicate",
+                "message": "Duplicate email detected",
+            },
+            {
+                "item_id": None,
+                "source_path": "invalid.eml",
+                "kind": "failed_import",
+                "message": "Unable to parse email",
+            },
+        ]
+
+        report = BatchReport(
+            batch_info,
+            [],
+            import_issues=import_issues
+        )
+
+        self.writer.export(report, self.output_path)
+
+        document = Document(self.output_path)
+
+        # Find the new import issues table.
+        matching_tables = [
+            table for table in document.tables
+            if table.rows
+            and table.rows[0].cells[0].text == "Email Reference"
+            and table.rows[0].cells[1].text == "Filename"
+        ]
+
+        self.assertEqual(len(matching_tables), 1)
+
+        table = matching_tables[0]
+
+        # One header row + two import issues.
+        self.assertEqual(len(table.rows), 3)
+
+        duplicate = [cell.text for cell in table.rows[1].cells]
+        failed = [cell.text for cell in table.rows[2].cells]
+
+        self.assertEqual(
+            duplicate,
+            [
+                "EMAIL-003",
+                "first_copy.eml",
+                "duplicate",
+                "Duplicate email detected",
+            ]
+        )
+
+        self.assertEqual(
+            failed,
+            [
+                "N/A",
+                "invalid.eml",
+                "failed_import",
+                "Unable to parse email",
+            ]
+        )
 
 if __name__ == "__main__":
     unittest.main()

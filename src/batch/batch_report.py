@@ -8,15 +8,26 @@ class BatchReport:
         self,
         batch_info: dict,
         email_records: list[dict],
-        campaign_detector: CampaignDetector | None = None
+        campaign_detector: CampaignDetector | None = None,
+        import_issues: list[dict] | None = None
     ) -> None:
         self._batch_info = batch_info.copy()
         self._email_records = [record.copy() for record in email_records]
+
+        self._import_issues = [
+            issue.copy() for issue in (import_issues or [])
+        ]
+
         self._campaign_detector = (
             campaign_detector
             if campaign_detector is not None
             else CampaignDetector()
         )
+
+    @property
+    def import_issues(self) -> list[dict]:
+        """Return copies of saved duplicate and failed-import records."""
+        return [issue.copy() for issue in self._import_issues]
         
     @property
     def batch_info(self) -> dict:
@@ -31,6 +42,10 @@ class BatchReport:
 
         return {
             "batch_reference": self._batch_info.get("batch_reference"),
+            "uploaded_files": self._batch_info.get("total_files") or 0,
+            "accepted_emails": self._batch_info.get("accepted_count") or 0,
+            "duplicate_files": self._batch_info.get("duplicate_count") or 0,
+            "failed_imports": self._batch_info.get("import_failed_count") or 0,
             "total_emails": self._batch_info.get("saved_email_count") or 0,
             "completed": self._batch_info.get("completed_count") or 0,
             "failed": self._batch_info.get("analysis_failed_count") or 0,
@@ -118,6 +133,7 @@ class BatchReport:
 
             ranked_records.append({
                 "submission_id": record.get("submission_id"),
+                "email_id": record.get("email_id"), 
                 "overall_risk": risk,
                 "risk_score": record.get("risk_score"),
                 "primary_threat_type": record.get("primary_threat_type"),
