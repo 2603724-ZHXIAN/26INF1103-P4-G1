@@ -274,6 +274,9 @@ class AIManager:
             "ANALYSIS REQUIREMENTS:\n"
             "- Identify message intent, relevant threat types, warning signs, "
             "and supporting evidence.\n"
+            "- Report warning signs not covered by the indicators in "
+            "other_warning_signs, each with a short name, the quoted "
+            "evidence from the message, and a plain-language explanation.\n"
             "- Explain threats in language suitable for everyday users.\n"
             "- Tailor preventive_steps to the submitted message.\n"
             "- Tailor recovery_steps to the reported interaction. When "
@@ -681,9 +684,22 @@ class AIManager:
                     "required": indicator_names,
                     "additionalProperties": False,
                 },
+                # Warning signs outside the fixed indicator list. Each item
+                # must match what LogicManager._validate_other_warning_signs
+                # accepts (name + evidence + explanation), otherwise the
+                # rule engine ignores it.
                 "other_warning_signs": {
                     "type": "array",
-                    "items": {"type": "string"},
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "evidence": {"type": "string"},
+                            "explanation": {"type": "string"},
+                        },
+                        "required": ["name", "evidence", "explanation"],
+                        "additionalProperties": False,
+                    },
                 },
                 "user_exposure": {
                     "type": "object",
