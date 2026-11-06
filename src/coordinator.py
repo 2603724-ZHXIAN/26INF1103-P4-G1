@@ -609,6 +609,27 @@ class EngineCoordinator:
                         submission.mark_completed()
                         self._data.save_submission(submission)
                         result_dict["success"] = True
+                    else:
+                        # Handle items that failed background processing
+                        submission = Submission(
+                            input_type="text",
+                            input_value=item.email_content,
+                            interaction_type="other",
+                            interaction_description=(
+                                "This email failed batch processing analysis."
+                            ),
+                            file_path=matching_email.source_path if matching_email else None,
+                            data_origin="batch_email",
+                            dataset_batch=batch_reference,
+                        )
+                        submission_id = self._data.save_submission(submission)
+                        self._data.link_submission_to_batch(batch_reference, submission_id)
+                        if matching_email is not None:
+                            self._data.save_email_metadata(submission_id, matching_email)
+                        
+                        error_msg = item.error_message or "Unknown processing error"
+                        submission.mark_failed(error_msg)
+                        self._data.save_submission(submission)
                 except DataManagerError:
                     LOGGER.exception("Database persistence failed for item %s", item.item_id)
                     result_dict["database_error"] = True
