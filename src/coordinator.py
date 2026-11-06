@@ -552,29 +552,34 @@ class EngineCoordinator:
 
             results = []
             for item in processed_items:
-                result_dict = {
-                    "success": item.status == "completed",
-                    "database_error": False,
-                    "item_id": item.item_id
-                }
-                try:
-                    if item.status == "completed":
-                        self._data.save_submission(item.submission)
-                    elif item.status == "failed":
-                        failed_sub = Submission(
-                            input_type="text",
-                            input_value=item.email_content,
-                            data_origin="batch",
-                            dataset_batch=batch_reference
-                        )
-                        self._data.save_submission(failed_sub)
-                except DataManagerError:
-                    result_dict["database_error"] = True
-                
-                results.append(result_dict)
-                
-                if result_dict["database_error"]:
-                    break
+                matching_email = next((e for e in accepted if e.item_id == item.item_id), None)
+                if item.status == "completed" and item.ai_result is not None:
+                    submission = Submission(
+                        input_type="text",
+                        input_value=item.email_content,
+                        interaction_type="other",
+                        interaction_description=(
+                            "This email was imported for batch analysis. "
+                            "Recipient actions are unknown and have not been reported."
+                        ),
+                        file_path=matching_email.source_path if matching_email else None,
+                        data_origin="batch_email",
+                        dataset_batch=batch_reference,
+                    )
+                    
+                    # Persist using the application's native, working pipeline function
+                    result = self._process_text_submission(submission, email=matching_email)
+                    result["item_id"] = item.item_id
+                    results.append(result)
+                else:
+                    results.append({
+                        "success": False,
+                        "database_error": True,
+                        "item_id": item.item_id
+                    })
+
+
+
         else:
             results = []
             for email in accepted:
