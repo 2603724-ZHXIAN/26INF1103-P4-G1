@@ -16,5 +16,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy the rest of the application code into the container
 COPY . .
 
-# EXPOSE 8000 (DONT TOUCH , Testing smth)
 CMD ["python", "-m", "src.main"]

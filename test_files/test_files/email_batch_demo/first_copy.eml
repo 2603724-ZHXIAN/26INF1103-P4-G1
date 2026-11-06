@@ -1,8 +1,0 @@
-From: Parcel Support <notice@example.com>
-To: recipient@example.com
-Subject: Delivery payment required
-MIME-Version: 1.0
-Content-Type: text/plain; charset=utf-8
-
-Your parcel is on hold.
-Please visit https://example.com/payment to review the delivery charge.
