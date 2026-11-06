@@ -553,31 +553,69 @@ class EngineCoordinator:
             results = []
             for item in processed_items:
                 matching_email = next((e for e in accepted if e.item_id == item.item_id), None)
-                if item.status == "completed" and item.ai_result is not None:
-                    submission = Submission(
-                        input_type="text",
-                        input_value=item.email_content,
-                        interaction_type="other",
-                        interaction_description=(
-                            "This email was imported for batch analysis. "
-                            "Recipient actions are unknown and have not been reported."
-                        ),
-                        file_path=matching_email.source_path if matching_email else None,
-                        data_origin="batch_email",
-                        dataset_batch=batch_reference,
-                    )
-                    
-                    # Persist using the application's native, working pipeline function
-                    result = self._process_text_submission(submission, email=matching_email)
-                    result["item_id"] = item.item_id
-                    results.append(result)
-                else:
-                    results.append({
-                        "success": False,
-                        "database_error": True,
-                        "item_id": item.item_id
-                    })
-
+                result_dict = {
+                    "success": False,
+                    "database_error": False,
+                    "item_id": item.item_id
+                }
+                try:
+                    if item.status == "completed" and item.ai_result is not None:
+                        submission = Submission(
+                            input_type="text",
+                            input_value=item.email_content,
+                            interaction_type="other",
+                            interaction_description=(
+                                "This email was imported for batch analysis. "
+                                "Recipient actions are unknown and have not been reported."
+                            ),
+                            file_path=matching_email.source_path if matching_email else None,
+                            data_origin="batch_email",
+                            dataset_batch=batch_reference,
+                        )
+                        
+                        submission_id = self._data.save_submission(submission)
+                        self._data.link_submission_to_batch(batch_reference, submission_id)
+                        
+                        if matching_email is not None:
+                            self._data.save_email_metadata(submission_id, matching_email)
+                            
+                        self._data.save_text_analysis(submission_id, item.ai_result, self._get_model_name())
+                        
+                        assessment = self._logic.evaluate_text_threat(submission, item.ai_result)
+                        self._attach_text_education(assessment, item.ai_result)
+                        submission.set_assessment(assessment)
+                        
+                        self._data.save_assessment(submission_id, assessment, self._get_model_name())
+                        
+                        indicators = item.ai_result.get("indicators", {})
+                        if isinstance(indicators, dict):
+                            for indicator_name, indicator_data in indicators.items():
+                                if isinstance(indicator_data, dict) and indicator_data.get("present") is True:
+                                    evidence_text = str(indicator_data.get("evidence", "")).strip()
+                                    severity = "high" if indicator_name in {
+                                        "payment_request", "credential_request", "otp_request", "download_request"
+                                    } else "medium"
+                                    submission.create_evidence(
+                                        name=indicator_name,
+                                        source="gemini",
+                                        evidence_type="indicator",
+                                        evidence_value=evidence_text or None,
+                                        excerpt=evidence_text[:200] if evidence_text else None,
+                                        severity=severity,
+                                    )
+                        if submission.evidences:
+                            self._data.save_evidences(submission_id, submission.evidences)
+                            
+                        submission.mark_completed()
+                        self._data.save_submission(submission)
+                        result_dict["success"] = True
+                except DataManagerError:
+                    LOGGER.exception("Database persistence failed for item %s", item.item_id)
+                    result_dict["database_error"] = True
+                
+                results.append(result_dict)
+                if result_dict["database_error"]:
+                    break
 
 
         else:

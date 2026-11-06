@@ -1,0 +1,12 @@
+From: help@bank-security-alerts.org
+To: user@example.com
+Subject: Notice: Your credit card has been temporarily locked
+MIME-Version: 1.0
+Content-Type: text/plain; charset="UTF-8"
+
+Cardholder,
+
+Your card was locked due to multiple failed authorization requests. To unlock your card immediately, reply with your full account details and card password.
+
+Securely yours,
+Bank Support

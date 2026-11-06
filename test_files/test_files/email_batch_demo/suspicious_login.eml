@@ -1,0 +1,12 @@
+From: security@alerts-mail-service.com
+To: user@example.com
+Subject: Security Alert: Unauthorized login attempt detected
+MIME-Version: 1.0
+Content-Type: text/plain; charset="UTF-8"
+
+Customer,
+
+We detected a login from an unknown device in a foreign location. If this was not you, you must authorize a password reset and confirm your credit card PIN to secure your funds.
+
+Regards,
+Fraud Protection
