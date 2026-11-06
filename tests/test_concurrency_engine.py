@@ -11,9 +11,9 @@ class DummyAIManager:
 class DummyLogicManager:
     def evaluate_text_threat(self, submission, ai_result):
         pass
-
+    
 def test_batch_item_state():
-    item =- BatchItem("ITEM-001", "test email content", "BATCH-123")
+    item = BatchItem("ITEM-001", "test email content", "BATCH-123")
     assert item.status == "pending"
     assert item.item_id == "ITEM-001"
     assert item.batch_id == "BATCH-123"
