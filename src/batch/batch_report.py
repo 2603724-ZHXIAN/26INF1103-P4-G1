@@ -133,6 +133,7 @@ class BatchReport:
 
             ranked_records.append({
                 "submission_id": record.get("submission_id"),
+                "email_id": record.get("email_id"), 
                 "overall_risk": risk,
                 "risk_score": record.get("risk_score"),
                 "primary_threat_type": record.get("primary_threat_type"),

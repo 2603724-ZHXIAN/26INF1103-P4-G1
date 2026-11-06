@@ -54,6 +54,9 @@ class TestWordReportWriter(unittest.TestCase):
                 "error_message": "AI provider timeout",
             },
         ]
+        # Add Email IDs to all three sample records
+        for index, record in enumerate(self.email_records, start=1):
+            record["email_id"] = f"EMAIL-{index:03d}"
 
         self.report = BatchReport(
             self.batch_info,
@@ -117,7 +120,7 @@ class TestWordReportWriter(unittest.TestCase):
         self.assertIn("Prioritised High-Risk Emails", text)
 
         # Verify the high-risk submission is displayed.
-        self.assertIn("Submission #101", text)
+        self.assertIn("Email ID: EMAIL-001", text)
         self.assertIn("Risk Level: High", text)
         self.assertIn("Risk Level: High", text)
         self.assertNotIn("Risk Score:", text)
@@ -149,7 +152,7 @@ class TestWordReportWriter(unittest.TestCase):
 
         self.assertEqual(cells[0].text, "Group 1")
         self.assertEqual(cells[1].text, "2")
-        self.assertEqual(cells[2].text, "101, 102")
+        self.assertEqual(cells[2].text, "EMAIL-001, EMAIL-002")
         self.assertEqual(cells[3].text, "Phishing")
         
     def test_campaign_section_excludes_single_emails(self):
@@ -184,7 +187,7 @@ class TestWordReportWriter(unittest.TestCase):
 
         self.assertIn("Failed Email Analyses", text)
         self.assertIn("AI provider timeout", text)
-        self.assertIn("103", text)
+        self.assertIn("EMAIL-003", text)
 
     def test_educational_guidance(self):
         document = self._generate_document()
@@ -259,6 +262,9 @@ class TestWordReportWriter(unittest.TestCase):
                 "error_message": "AI provider timeout",
             })
 
+        # Give all 100 test emails realistic email references.
+        for index, record in enumerate(records, start=1):
+            record["email_id"] = f"EMAIL-{index:03d}"
     
         # Add sample educational guidance to completed emails.
         for record in records:
@@ -291,11 +297,6 @@ class TestWordReportWriter(unittest.TestCase):
         report = BatchReport(batch_info, records)
         self.writer.export(report, self.output_path)
 
-        self.writer.export(
-            report,
-            "reports/batch_100_email_preview.docx"
-        )
-
         document = Document(self.output_path)
         text = self._document_text(document)
 
@@ -303,11 +304,11 @@ class TestWordReportWriter(unittest.TestCase):
         self.assertIn("100 emails submitted", text)
         self.assertIn("94 successfully analysed", text)
 
-        # Check top-10 limit.
+        # Check that only 10 high-risk emails receive detailed headings.
         self.assertEqual(
             sum(
                 1 for paragraph in document.paragraphs
-                if paragraph.text.startswith("Submission #")
+                if paragraph.text.startswith("Email ID: EMAIL-")
             ),
             10,
         )
@@ -337,7 +338,7 @@ class TestWordReportWriter(unittest.TestCase):
         self.assertEqual(len(set(ids)), 100)
 
         # Highest-risk email comes first.
-        self.assertEqual(ids[0], "1001")
+        self.assertEqual(ids[0], "EMAIL-001")
 
         # Failed emails are still included.
         failed_rows = [
