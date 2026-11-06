@@ -26,6 +26,7 @@ class WordReportWriter:
         self._add_executive_summary(document, summary)
         self._add_summary_section(document, summary)
         self._add_import_summary(document, summary)
+        self._add_import_issues_section(document, report)
 
        
         # Risk Distribution
@@ -101,6 +102,41 @@ class WordReportWriter:
             cells = table.add_row().cells
             cells[0].text = status
             cells[1].text = str(count)
+
+        self._style_table(table)
+
+    def _add_import_issues_section(self, document, report: BatchReport) -> None:
+        """Display duplicate files and failed imports saved for this batch."""
+
+        document.add_heading(
+            "Emails Not Scanned — Duplicates and Failed Imports",
+            level=1
+        )
+
+        issues = report.import_issues
+
+        if not issues:
+            document.add_paragraph(
+                "No duplicate files or failed imports were recorded."
+            )
+            return
+
+        table = document.add_table(rows=1, cols=4)
+        table.style = "Table Grid"
+
+        headers = table.rows[0].cells
+        headers[0].text = "Email Reference"
+        headers[1].text = "Filename"
+        headers[2].text = "Status"
+        headers[3].text = "Reason"
+
+        for issue in issues:
+            cells = table.add_row().cells
+
+            cells[0].text = str(issue.get("item_id") or "N/A")
+            cells[1].text = str(issue.get("source_path") or "Unknown")
+            cells[2].text = str(issue.get("kind") or "Unknown")
+            cells[3].text = str(issue.get("message") or "Not provided")
 
         self._style_table(table)
 

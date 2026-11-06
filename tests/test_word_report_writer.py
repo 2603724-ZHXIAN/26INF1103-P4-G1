@@ -478,7 +478,78 @@ class TestWordReportWriter(unittest.TestCase):
             guidance_paragraphs,
         )
 
+    def test_word_report_displays_import_issues(self):
+        """Verify duplicate and failed-import details appear in Word."""
 
+        batch_info = {
+            "batch_reference": "BATCH-005",
+            "saved_email_count": 0,
+            "completed_count": 0,
+            "analysis_failed_count": 0,
+        }
+
+        import_issues = [
+            {
+                "item_id": "EMAIL-003",
+                "source_path": "first_copy.eml",
+                "kind": "duplicate",
+                "message": "Duplicate email detected",
+            },
+            {
+                "item_id": None,
+                "source_path": "invalid.eml",
+                "kind": "failed_import",
+                "message": "Unable to parse email",
+            },
+        ]
+
+        report = BatchReport(
+            batch_info,
+            [],
+            import_issues=import_issues
+        )
+
+        self.writer.export(report, self.output_path)
+
+        document = Document(self.output_path)
+
+        # Find the new import issues table.
+        matching_tables = [
+            table for table in document.tables
+            if table.rows
+            and table.rows[0].cells[0].text == "Email Reference"
+            and table.rows[0].cells[1].text == "Filename"
+        ]
+
+        self.assertEqual(len(matching_tables), 1)
+
+        table = matching_tables[0]
+
+        # One header row + two import issues.
+        self.assertEqual(len(table.rows), 3)
+
+        duplicate = [cell.text for cell in table.rows[1].cells]
+        failed = [cell.text for cell in table.rows[2].cells]
+
+        self.assertEqual(
+            duplicate,
+            [
+                "EMAIL-003",
+                "first_copy.eml",
+                "duplicate",
+                "Duplicate email detected",
+            ]
+        )
+
+        self.assertEqual(
+            failed,
+            [
+                "N/A",
+                "invalid.eml",
+                "failed_import",
+                "Unable to parse email",
+            ]
+        )
 
 if __name__ == "__main__":
     unittest.main()

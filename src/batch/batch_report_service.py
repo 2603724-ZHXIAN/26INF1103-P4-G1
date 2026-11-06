@@ -44,4 +44,12 @@ class BatchReportService:
                     **detailed_report,
                 })
 
-        return BatchReport(batch_info, email_records)
+        import_issues = self._data_manager.get_batch_import_issues(
+            batch_reference
+        )
+
+        return BatchReport(
+            batch_info,
+            email_records,
+            import_issues=import_issues
+        )

@@ -10,6 +10,9 @@ class TestBatchReportService(unittest.TestCase):
 
     def setUp(self):
         self.data_manager = Mock()
+
+        self.data_manager.get_batch_import_issues.return_value = []
+
         self.service = BatchReportService(self.data_manager)
 
     def test_build_report_from_saved_records(self):
@@ -113,6 +116,49 @@ class TestBatchReportService(unittest.TestCase):
 
         self.data_manager.get_submission_report.assert_not_called()
 
+    def test_build_report_includes_import_issues(self):
+        """Verify saved duplicate and failed-import records are included."""
 
+        self.data_manager.list_email_batches.return_value = [
+            {
+                "batch_reference": "BATCH-004",
+                "saved_email_count": 0,
+                "completed_count": 0,
+                "analysis_failed_count": 0,
+            }
+        ]
+
+        self.data_manager.get_batch_submissions.return_value = []
+
+        self.data_manager.get_batch_import_issues.return_value = [
+            {
+                "item_id": "EMAIL-003",
+                "source_path": "first_copy.eml",
+                "kind": "duplicate",
+                "message": "Duplicate email detected",
+            },
+            {
+                "item_id": None,
+                "source_path": "invalid.eml",
+                "kind": "failed_import",
+                "message": "Unable to parse email",
+            },
+        ]
+
+        report = self.service.build_report("BATCH-004")
+
+        self.assertEqual(len(report.import_issues), 2)
+        self.assertEqual(
+            report.import_issues[0]["source_path"],
+            "first_copy.eml"
+        )
+        self.assertEqual(
+            report.import_issues[1]["message"],
+            "Unable to parse email"
+        )
+
+        self.data_manager.get_batch_import_issues.assert_called_once_with(
+            "BATCH-004"
+        )
 if __name__ == "__main__":
     unittest.main()
