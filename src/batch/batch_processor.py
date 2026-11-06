@@ -24,3 +24,40 @@ class BatchProcessor:
             for future in futures:
                 results.append(future.result())
         return results
+
+    def _worker_task(self, item: BatchItem) -> BatchItem:
+        if self._cancel_event.is_set():
+            item.mark_failed("Task cancelled")
+            return item
+
+        item.mark_processing()
+        try:
+            submission = Submission(
+                input_type="text",
+                input_value=item.email_content,
+                data_origin="batch",
+                dataset_batch_id=item.batch_id,
+            )
+
+            self._rate_limiter.wait_if_needed()
+            ai_result = self._ai_manager.analyze_message(
+                item.email_content,
+                interaction="unknown",
+                include_scenarios=True,
+            )
+
+            indicators = ai_result.get("indicators", [])
+            for ind in indicators:
+                if ind.get("present") is True:
+                    evidence = ThreatEvidence(indicator=ind)
+                    submission.create_evidence(evidence)
+
+            self._logic_manager.evaluate_text_threat(submission, ai_result)
+            item.mark_completed(submission)
+
+        except Exception as e:
+            item.mark_failed(str(e))
+
+        return item
+
+    
