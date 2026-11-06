@@ -175,15 +175,23 @@ docker build -f dockerfile -t cyber-threat-engine:latest .
 docker run --rm cyber-threat-engine:latest python run_tests.py
 ```
 
-### 3. Prepare files for analysis (optional)
-Create a folder named `test_files` in the root folder and place any files you want to analyse inside it.
+### 3. Prepare the folders
+The container is deleted when the app closes (`--rm`), so the database and Word reports must be saved **outside** it.
+The run commands below connect these folders on your computer to the container:
+
+| Folder on your computer | Inside the container | Purpose |
+|---|---|---|
+| `data/` | `/app/data` | SQLite database (records, history and batches are kept between runs) |
+| `reports/` | `/app/reports` | Word batch reports, ready to open on your computer |
+| `test_files/` | `/files` (read-only) | Files and `.eml` emails you want to analyse |
+
 ```powershell
 # Windows PowerShell
-New-Item -ItemType Directory -Force test_files
+New-Item -ItemType Directory -Force data, reports, test_files
 ```
 ```bash
 # macOS / Linux
-mkdir -p test_files
+mkdir -p data reports test_files
 ```
 
 ### 4. Start the application container
@@ -194,6 +202,8 @@ Ensure your `.env` file exists in the root project folder.
 docker run --rm -it `
   --mount "type=bind,source=$($PWD.Path)\.env,target=/app/.env,readonly" `
   --mount "type=bind,source=$($PWD.Path)\test_files,target=/files,readonly" `
+  -v "$($PWD.Path)\data:/app/data" `
+  -v "$($PWD.Path)\reports:/app/reports" `
   cyber-threat-engine:latest
 ```
 
@@ -202,14 +212,19 @@ docker run --rm -it `
 docker run --rm -it \
   --mount "type=bind,source=$(pwd)/.env,target=/app/.env,readonly" \
   --mount "type=bind,source=$(pwd)/test_files,target=/files,readonly" \
+  -v "$(pwd)/data:/app/data" \
+  -v "$(pwd)/reports:/app/reports" \
   cyber-threat-engine:latest
 ```
 
-### 5. Analyse a file in Docker
-Select option `[3]` in the menu and enter the container path:
+### 5. Analyse files and emails in Docker
+Use the container paths under `/files`:
 ```text
-/files/your_file.txt
+Option [3] Analyse File                    -> /files/your_file.txt
+Option [4] Batch Input Analysis (folder)   -> /files/email_batch_demo
 ```
+Word reports exported from the batch menu (option `4. Download Batch Report (.docx)`) appear in your `reports/` folder,
+and all saved records remain in `data/database.db` the next time you start the container.
 
 ---
 
