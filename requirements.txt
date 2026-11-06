@@ -8,4 +8,8 @@ colorama
 tabulate
 matplotlib
 windows-curses; sys_platform == "win32"
+<<<<<<< HEAD
 tqdm
+=======
+tqdm
+>>>>>>> 394f09e5696f8ca3f34abc171cb8709be8b211b9
