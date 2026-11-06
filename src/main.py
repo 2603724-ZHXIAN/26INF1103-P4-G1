@@ -9,6 +9,7 @@ Demonstrates:
 
 import logging
 import os
+import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -34,6 +35,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
 )
+LOGGER = logging.getLogger(__name__)
 
 
 def main() -> None:
@@ -75,11 +77,19 @@ def main() -> None:
 
     # --- Manager layer -------------------------------------------------------
     data_manager = DataManager(db_path="data/database.db")
-    data_manager.initialize_database()
+    io_manager = IOManager(data_manager=data_manager)
+
+    # A missing database is created automatically; a damaged or unreadable
+    # one is reported clearly instead of crashing with a traceback.
+    try:
+        data_manager.initialize_database()
+    except DataManagerError:
+        LOGGER.exception("Start-up failed: the database could not be opened.")
+        io_manager.display_database_startup_error("data/database.db")
+        sys.exit(1)
 
     ai_manager = AIManager(llm_client=gemini_client, fallback_client=groq_client)
     logic_manager = LogicManager()
-    io_manager = IOManager(data_manager=data_manager)
 
     # --- Coordinator (Composition + Aggregation) ----------------------------
     
