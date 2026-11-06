@@ -21,10 +21,15 @@ class BatchProcessor:
     def process_batch(self, items: typing.List[BatchItem]) -> typing.List[BatchItem]:
         results = []
         with ThreadPoolExecutor(max_workers=self._max_workers) as executor:
-            futures = [executor.submit(self._worker_task, item) for item in items]
-
-            for future in futures:
-                results.append(future.result())
+            future_to_item = {executor.submit(self._worker_task, item): item for item in items}
+            for future in as_completed(future_to_item):
+                try:
+                    res_item = future.result()
+                    results.append(res_item)
+                except Exception as exc:
+                    item = future_to_item[future]
+                    item.mark_failed(str(exc))
+                    results.append(item)
         return results
 
 
@@ -40,28 +45,17 @@ class BatchProcessor:
 
         item.mark_processing()
         try:
-            submission = Submission(
-                input_type="text",
-                input_value=item.email_content,
-                data_origin="batch",
-                dataset_batch_id=item.batch_id,
-            )
-
             self._rate_limiter.wait_if_needed()
             ai_result = self._ai_manager.analyze_message(
                 item.email_content,
                 interaction="unknown",
                 include_scenarios=True,
             )
+            
+            if not isinstance(ai_result, dict) or "error" in ai_result:
+                raise ValueError(ai_result.get("error", "AI analysis failed."))
 
-            indicators = ai_result.get("indicators", [])
-            for ind in indicators:
-                if ind.get("present") is True:
-                    evidence = ThreatEvidence(indicator=ind)
-                    submission.create_evidence(evidence)
-
-            self._logic_manager.evaluate_text_threat(submission, ai_result)
-            item.mark_completed(submission)
+            item.mark_completed(None, ai_result=ai_result)
 
         except Exception as e:
             item.mark_failed(str(e))
@@ -71,6 +65,7 @@ class BatchProcessor:
 
         return item
 
+    
     def cancel(self) -> None:
         self._cancel_event.set()
 
