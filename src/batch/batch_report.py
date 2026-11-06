@@ -31,6 +31,10 @@ class BatchReport:
 
         return {
             "batch_reference": self._batch_info.get("batch_reference"),
+            "uploaded_files": self._batch_info.get("total_files") or 0,
+            "accepted_emails": self._batch_info.get("accepted_count") or 0,
+            "duplicate_files": self._batch_info.get("duplicate_count") or 0,
+            "failed_imports": self._batch_info.get("import_failed_count") or 0,
             "total_emails": self._batch_info.get("saved_email_count") or 0,
             "completed": self._batch_info.get("completed_count") or 0,
             "failed": self._batch_info.get("analysis_failed_count") or 0,

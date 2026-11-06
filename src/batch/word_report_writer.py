@@ -25,6 +25,7 @@ class WordReportWriter:
 
         self._add_executive_summary(document, summary)
         self._add_summary_section(document, summary)
+        self._add_import_summary(document, summary)
 
        
         # Risk Distribution
@@ -76,6 +77,34 @@ class WordReportWriter:
         document.add_paragraph(
             f"Failed: {summary['failed']}"
         )
+
+    def _add_import_summary(self, document, summary: dict) -> None:
+        """Display the batch's saved email import statistics."""
+
+        document.add_heading("Batch Import Summary", level=1)
+
+        table = document.add_table(rows=1, cols=2)
+        table.style = "Table Grid"
+
+        header = table.rows[0].cells
+        header[0].text = "Import Status"
+        header[1].text = "Count"
+
+        import_statistics = [
+            ("Uploaded Files", summary["uploaded_files"]),
+            ("Accepted Emails", summary["accepted_emails"]),
+            ("Duplicate Files", summary["duplicate_files"]),
+            ("Failed Imports", summary["failed_imports"]),
+        ]
+
+        for status, count in import_statistics:
+            cells = table.add_row().cells
+            cells[0].text = status
+            cells[1].text = str(count)
+
+        self._style_table(table)
+
+
 
     def _add_risk_section(
         self, document, report: BatchReport, summary: dict

@@ -347,6 +347,51 @@ class TestWordReportWriter(unittest.TestCase):
 
         self.assertEqual(len(failed_rows), 6)
 
+    def test_word_report_displays_import_statistics(self):
+        """Verify the Word report displays saved batch import counts."""
+
+        batch_info = {
+            "batch_reference": "BATCH-0001",
+            "total_files": 4,
+            "accepted_count": 2,
+            "duplicate_count": 1,
+            "import_failed_count": 1,
+            "saved_email_count": 2,
+            "completed_count": 2,
+            "analysis_failed_count": 0,
+            "high_risk_count": 2,
+            "medium_risk_count": 0,
+            "low_risk_count": 0,
+        }
+
+        report = BatchReport(batch_info, [])
+
+        self.writer.export(report, self.output_path)
+
+        document = Document(self.output_path)
+
+        # Find the Import Summary table.
+        matching_tables = [
+            table for table in document.tables
+            if table.rows
+            and table.rows[0].cells[0].text == "Import Status"
+            and table.rows[0].cells[1].text == "Count"
+        ]
+
+        self.assertEqual(len(matching_tables), 1)
+
+        import_table = matching_tables[0]
+
+        actual_counts = {
+            row.cells[0].text: row.cells[1].text
+            for row in import_table.rows[1:]
+        }
+
+        self.assertEqual(actual_counts["Uploaded Files"], "4")
+        self.assertEqual(actual_counts["Accepted Emails"], "2")
+        self.assertEqual(actual_counts["Duplicate Files"], "1")
+        self.assertEqual(actual_counts["Failed Imports"], "1")
+
 
     def test_guidance_groups_duplicate_advice(self):
         """Group identical advice while preserving unique recovery steps."""
