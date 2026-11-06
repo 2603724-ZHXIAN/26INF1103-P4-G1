@@ -6,7 +6,7 @@ from src.batch.rate_limiter import RateLimiter
 from src.managers.ai_manager import AIManager
 from src.managers.logic_manager import LogicManager 
 from src.models.submission import Submission
-from src.models.evidence import ThreadEvidence
+from src.models.evidence import ThreatEvidence
 
 class BatchProcessor:
     def __init__(self, ai_manager: AIManager, logic_manager: LogicManager, rate_limiter: RateLimiter, max_workers: int = 5) -> None:
@@ -63,4 +63,3 @@ class BatchProcessor:
     def cancel(self) -> None:
         self._cancel_event.set()
 
-        

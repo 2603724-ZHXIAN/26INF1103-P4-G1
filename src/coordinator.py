@@ -528,10 +528,10 @@ class EngineCoordinator:
             "processing",
         )
 
-        batch_items = []
-        for email in accepted:
-            analysis_content = json.dumps(
-                {
+        if self._batch_processor is not None:
+            batch_items = []
+            for email in accepted:
+                analysis_content = json.dumps({
                     "subject": email.subject,
                     "sender": email.sender,
                     "reply_to": email.reply_to,
@@ -540,43 +540,79 @@ class EngineCoordinator:
                     "extracted_urls": email.urls,
                     "attachment_metadata": email.attachments,
                     "parsing_warnings": email.warnings,
-                },
-                ensure_ascii=False,
-            )
-            item = BatchItem(
-                item_id=email.item_id,
-                email_content=analysis_content,
-                batch_id=batch_reference
-            )
-            batch_items.append(item)
+                }, ensure_ascii=False)
+                item = BatchItem(
+                    item_id=email.item_id,
+                    email_content=analysis_content,
+                    batch_id=batch_reference
+                )
+                batch_items.append(item)
 
-        processed_items = self._batch_processor.process_batch(batch_items)
+            processed_items = self._batch_processor.process_batch(batch_items)
 
-        results = []
-        for item in processed_items:
-            result_dict = {
-                "success": item.status == "completed",
-                "database_error": False,
-                "item_id": item.item_id
-            }
-            try:
-                if item.status == "completed":
-                    self._data.save_submission(item.submission)
-                elif item.status == "failed":
-                    failed_sub = Submission(
-                        input_type="text",
-                        input_value=item.email_content,
-                        data_origin="batch",
-                        dataset_batch=batch_reference
-                    )
-                    self._data.save_submission(failed_sub)
-            except DataManagerError:
-                result_dict["database_error"] = True
-            
-            results.append(result_dict)
-            
-            if result_dict["database_error"]:
-                break
+            results = []
+            for item in processed_items:
+                result_dict = {
+                    "success": item.status == "completed",
+                    "database_error": False,
+                    "item_id": item.item_id
+                }
+                try:
+                    if item.status == "completed":
+                        self._data.save_submission(item.submission)
+                    elif item.status == "failed":
+                        failed_sub = Submission(
+                            input_type="text",
+                            input_value=item.email_content,
+                            data_origin="batch",
+                            dataset_batch=batch_reference
+                        )
+                        self._data.save_submission(failed_sub)
+                except DataManagerError:
+                    result_dict["database_error"] = True
+                
+                results.append(result_dict)
+                
+                if result_dict["database_error"]:
+                    break
+        else:
+            results = []
+            for email in accepted:
+                analysis_content = json.dumps({
+                    "subject": email.subject,
+                    "sender": email.sender,
+                    "reply_to": email.reply_to,
+                    "recipients": email.recipients,
+                    "body_text": email.body_text,
+                    "extracted_urls": email.urls,
+                    "attachment_metadata": email.attachments,
+                    "parsing_warnings": email.warnings,
+                }, ensure_ascii=False)
+
+                submission = Submission(
+                    input_type="text",
+                    input_value=analysis_content,
+                    interaction_type="other",
+                    interaction_description=(
+                        "This email was imported for batch analysis. "
+                        "Recipient actions are unknown and have not "
+                        "been reported."
+                    ),
+                    file_path=email.source_path,
+                    data_origin="batch_email",
+                    dataset_batch=batch_reference,
+                )
+
+                result = self._process_text_submission(
+                    submission,
+                    email=email,
+                )
+
+                result["item_id"] = email.item_id
+                results.append(result)
+
+                if result["database_error"]:
+                    break
 
         successful_count = 0
         analysis_failed_count = 0
