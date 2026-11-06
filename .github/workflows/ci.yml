@@ -46,7 +46,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Build Docker image
-        run: docker build -f dockerfile -t cyber-threat-engine:ci .
+        run: docker build -t cyber-threat-engine:ci .
 
       - name: Run tests inside the container
         run: docker run --rm cyber-threat-engine:ci python run_tests.py -v

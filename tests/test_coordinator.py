@@ -636,6 +636,83 @@ class TestRunLoopDispatch(unittest.TestCase):
         self.coord.run()  # Must not raise
 
 
+class TestActionDispatchTable(unittest.TestCase):
+    """run() is table-driven (OCP): actions are looked up, not if/elif chained."""
+
+    # Every action IOManager.collect_user_request() can return, except "exit".
+    MENU_ACTIONS = {
+        "analyze_submission",
+        "batch_email_analysis",
+        "previous_email_batches",
+        "emerging_threat_radar",
+        "view_trending_threats",
+        "history_query",
+    }
+
+    def setUp(self):
+        self.coord = _make_coordinator()
+        self.addCleanup(self.coord._data.close)
+        self.coord._io._print = lambda *a, **kw: None
+
+    def test_every_menu_action_has_a_handler(self):
+        handlers = self.coord._build_action_handlers()
+
+        self.assertEqual(set(handlers), self.MENU_ACTIONS)
+        for action, handler in handlers.items():
+            with self.subTest(action=action):
+                self.assertTrue(callable(handler))
+
+    def test_batch_action_is_dispatched_with_its_request(self):
+        request = {"action": "batch_email_analysis", "path": "emails"}
+        self.coord._io.collect_user_request = MagicMock(side_effect=[request, {"action": "exit"}])
+        self.coord._handle_batch_menu_request = MagicMock()
+
+        self.coord.run()
+
+        self.coord._handle_batch_menu_request.assert_called_once_with(request)
+
+    def test_previous_batches_action_is_dispatched(self):
+        self.coord._io.collect_user_request = MagicMock(
+            side_effect=[{"action": "previous_email_batches"}, {"action": "exit"}]
+        )
+        self.coord._handle_previous_batch_request = MagicMock()
+
+        self.coord.run()
+
+        self.coord._handle_previous_batch_request.assert_called_once_with()
+
+    def test_unknown_action_is_logged_and_the_menu_continues(self):
+        self.coord._io.collect_user_request = MagicMock(
+            side_effect=[{"action": "does_not_exist"}, {"action": "exit"}]
+        )
+
+        with self.assertLogs("src.coordinator", level="WARNING") as logs:
+            self.coord.run()
+
+        self.assertEqual(self.coord._io.collect_user_request.call_count, 2)
+        self.assertTrue(any("does_not_exist" in line for line in logs.output))
+
+    def test_new_action_can_be_added_without_changing_run(self):
+        """Open/Closed: a subclass registers a new action; run() is reused as-is."""
+        handled = []
+
+        class ExtendedCoordinator(EngineCoordinator):
+            def _build_action_handlers(self):
+                handlers = super()._build_action_handlers()
+                handlers["export_all"] = handled.append
+                return handlers
+
+        base = self.coord
+        extended = ExtendedCoordinator(base._io, base._ai, base._logic, base._data)
+        request = {"action": "export_all"}
+        base._io.collect_user_request = MagicMock(side_effect=[request, {"action": "exit"}])
+
+        extended.run()
+
+        self.assertEqual(handled, [request])
+        self.assertIs(ExtendedCoordinator.run, EngineCoordinator.run)
+
+
 class TestHelperMethods(unittest.TestCase):
     """Unit-test private helper methods in isolation."""
 
@@ -1077,7 +1154,7 @@ class TestConcurrentBatchCoordinator(unittest.TestCase):
             scanner=None,
             ingestion_service=self.ingestion,
             batch_processor=BatchProcessor(
-                self.ai, self.logic, RateLimiter(max_calls=100, time_window=60), max_workers=3
+                self.ai, RateLimiter(max_calls=100, time_window=60), max_workers=3
             ),
         )
 
@@ -1111,6 +1188,45 @@ class TestConcurrentBatchCoordinator(unittest.TestCase):
         result = self._run_batch()
         self.assertEqual(result["successful_count"], 3)
         self.assertEqual([status for status, _ in self._saved_statuses()], ["completed"] * 3)
+
+    def test_each_email_is_sent_to_the_ai_only_once(self):
+        """Workers ask the AI; the shared pipeline reuses that answer."""
+        self.ai.analyze_message.side_effect = self._answer_with("no-match", {})
+        result = self._run_batch()
+        self.assertEqual(self.ai.analyze_message.call_count, 3)
+        self.assertEqual(
+            [entry["item_id"] for entry in result["results"]],
+            ["EMAIL-001", "EMAIL-002", "EMAIL-003"],
+        )
+
+    def test_threaded_and_sequential_batches_save_the_same_records(self):
+        """Both modes use one pipeline, so they store identical evidence and risk."""
+        risky = TestBatchCoordinator._make_batch_response()
+        risky["indicators"]["credential_request"] = {"present": True, "evidence": "Enter your password"}
+        risky["indicators"]["suspicious_link"] = {"present": True, "evidence": "http://fake.example"}
+        self.ai.analyze_message.side_effect = lambda text, **kwargs: copy.deepcopy(risky)
+        self._run_batch()
+        threaded = self._saved_assessments()
+
+        self.coord._batch_processor = None
+        self._run_batch()
+        sequential = self._saved_assessments()[len(threaded):]
+
+        self.assertEqual(threaded, [("high", 2)] * 3)
+        self.assertEqual(sequential, threaded)
+
+    def _saved_assessments(self):
+        import sqlite3
+        from contextlib import closing
+        with closing(sqlite3.connect(self.database_path)) as connection:
+            return connection.execute(
+                """SELECT fa.risk_category,
+                          (SELECT COUNT(*) FROM detection_evidence de
+                           WHERE de.submission_id = s.submission_id)
+                   FROM submission s
+                   JOIN final_assessment fa ON fa.submission_id = s.submission_id
+                   ORDER BY s.submission_id"""
+            ).fetchall()
 
     def test_ai_error_is_saved_as_failed_record(self):
         self.ai.analyze_message.side_effect = self._answer_with(
@@ -1160,7 +1276,7 @@ class TestConcurrentBatchCoordinator(unittest.TestCase):
             self.fail("Ctrl+C escaped run(): the batch review menu crashed the app.")
 
         io.collect_batch_review_request.assert_called()
-        printed = " ".join(str(call.args[0]) for call in io._print.call_args_list if call.args)
+        printed = " ".join(str(call.args[0]) for call in io.display_message.call_args_list if call.args)
         self.assertIn("Goodbye", printed)
 
 

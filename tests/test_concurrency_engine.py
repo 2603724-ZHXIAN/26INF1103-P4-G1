@@ -113,12 +113,12 @@ class BatchProcessorTests(unittest.TestCase):
     def setUp(self):
         # Silence the progress bar and worker log lines during tests.
         patcher = mock.patch("src.batch.batch_processor.tqdm")
-        patcher.start()
+        self.fake_tqdm = patcher.start()
         self.addCleanup(patcher.stop)
         self.limiter = mock.Mock(spec=RateLimiter)
 
     def make_processor(self, ai_manager, max_workers=2):
-        return BatchProcessor(ai_manager, mock.Mock(), self.limiter, max_workers=max_workers)
+        return BatchProcessor(ai_manager, self.limiter, max_workers=max_workers)
 
     def test_every_item_is_analysed_and_completed(self):
         ai = FakeAIManager()
@@ -171,16 +171,51 @@ class BatchProcessorTests(unittest.TestCase):
         self.assertEqual([item.status for item in results], ["failed", "failed"])
         self.assertEqual({item.error_message for item in results}, {"network down"})
 
-    def test_cancelled_batch_skips_the_ai(self):
+    def test_cancel_skips_emails_that_have_not_started(self):
+        # One worker: the first email cancels the batch while it is analysed,
+        # so the two emails still waiting are never sent to the AI.
+        processor = None
+
+        def answer(_text):
+            processor.cancel()
+            return AI_RESULT
+
+        ai = FakeAIManager(result=answer)
+        processor = self.make_processor(ai, max_workers=1)
+        results = processor.process_batch(make_items(3))
+        by_id = {item.item_id: item for item in results}
+
+        self.assertEqual(len(ai.calls), 1)
+        self.assertEqual(by_id["ITEM-001"].status, "completed")
+        for item_id in ("ITEM-002", "ITEM-003"):
+            with self.subTest(item=item_id):
+                self.assertEqual(by_id[item_id].status, "failed")
+                self.assertEqual(by_id[item_id].error_message, "Task cancelled")
+
+    def test_ctrl_c_cancels_waiting_emails_and_is_passed_on(self):
+        # Ctrl+C arrives in the main thread while the progress bar updates.
+        self.fake_tqdm.return_value.__enter__.return_value.update.side_effect = KeyboardInterrupt
+        ai = FakeAIManager()
+
+        with self.assertRaises(KeyboardInterrupt):
+            self.make_processor(ai, max_workers=1).process_batch(make_items(5))
+
+        self.assertLess(len(ai.calls), 5)
+
+    def test_a_new_batch_runs_normally_after_a_cancelled_one(self):
         ai = FakeAIManager()
         processor = self.make_processor(ai)
-
         processor.cancel()
-        results = processor.process_batch(make_items(3))
 
-        self.assertEqual(ai.calls, [])
-        self.assertTrue(all(item.status == "failed" for item in results))
-        self.assertTrue(all(item.error_message == "Task cancelled" for item in results))
+        results = processor.process_batch(make_items(2))
+
+        self.assertEqual([item.status for item in results], ["completed", "completed"])
+
+    def test_workers_do_not_print(self):
+        # Only the main thread draws the progress bar; workers stay silent.
+        self.make_processor(FakeAIManager()).process_batch(make_items(3))
+
+        self.fake_tqdm.write.assert_not_called()
 
     def test_workers_really_run_at_the_same_time(self):
         # Each call waits at a barrier until a second worker arrives. With two

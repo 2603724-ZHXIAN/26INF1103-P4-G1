@@ -1,8 +1,10 @@
 """EngineCoordinator: Central orchestrator for the Cyber Threat Detection Engine.
 
 Demonstrates OOP Rubric Principles:
-- Composition:   Owns the lifecycle of IOManager, AIManager, LogicManager, DataManager.
-- Aggregation:   Receives VirusTotalScanner via dependency injection (concrete service, YAGNI applied).
+- Aggregation:   Receives IOManager, AIManager, LogicManager, DataManager, the
+                 VirusTotalScanner, ingestion service and BatchProcessor through its
+                 constructor (dependency injection). main.py creates them and they can
+                 exist without the coordinator, so it does not own their lifecycles.
 - Association:   Coordinates managers by dynamically passing domain entities (Submission,
                  AssessmentResult) through method calls ("Uses-A" relationship).
 - Encapsulation: All manager references are private (_io, _ai, _logic, _data, _scanner).
@@ -13,7 +15,7 @@ Demonstrates OOP Rubric Principles:
 
 import json
 import logging
-from typing import Optional
+from typing import Callable, Dict, Optional
 import re
 from pathlib import Path
 
@@ -58,18 +60,17 @@ class EngineCoordinator:
         ingestion_service: Optional[EmailIngestionService] = None,
         batch_processor: Optional[BatchProcessor] = None,
     ) -> None:
-        """Initialise the coordinator with its composed and aggregated dependencies.
+        """Store the injected collaborators (aggregation: none are created here).
 
         Args:
-            io_manager:    Presentation layer (Composition — coordinator owns its use).
-            ai_manager:    LLM orchestration layer (Composition).
-            logic_manager: Business rule engine (Composition).
-            data_manager:  Persistence layer (Composition).
-            scanner:       VirusTotalScanner service (Aggregation — injected, not owned).
+            io_manager:        Presentation layer.
+            ai_manager:        LLM orchestration layer.
+            logic_manager:     Business rule engine.
+            data_manager:      Persistence layer.
+            scanner:           Optional VirusTotal service for URLs and files.
+            ingestion_service: Optional email import service for batch scans.
+            batch_processor:   Optional worker pool for concurrent batch analysis.
         """
-
-        
-        
         # Aggregation: retain injected application components without
         # taking ownership of their lifecycles.
         self._io: IOManager = io_manager
@@ -77,12 +78,10 @@ class EngineCoordinator:
         self._logic: LogicManager = logic_manager
         self._data: DataManager = data_manager
 
-        # Aggregation: VirusTotalScanner is injected (standalone concrete service)
         self._scanner: Optional[VirusTotalScanner] = scanner
-        self._ingestion = ingestion_service
+        self._ingestion: Optional[EmailIngestionService] = ingestion_service
+        self._batch_processor: Optional[BatchProcessor] = batch_processor
 
-        self._batch_processor = batch_processor
-        
     # -------------------------------------------------------------------------
     # Public Entry Point
     # -------------------------------------------------------------------------
@@ -90,16 +89,18 @@ class EngineCoordinator:
     def run(self) -> None:
         """Collect requests and dispatch them to the appropriate workflow.
 
-        Uses explicit action branches; introducing a new action requires
-        updating this dispatch method.
+        OCP: dispatch is table-driven. run() looks the action up in
+        _build_action_handlers(), so a new menu feature is added by writing a
+        handler and registering it there, without modifying this loop.
         """
         LOGGER.info("EngineCoordinator.run() started.")
+        handlers = self._build_action_handlers()
 
         while True:
             try:
                 request = self._io.collect_user_request()
             except (KeyboardInterrupt, EOFError):
-                self._io._print("\n\nSession interrupted. Goodbye!")
+                self._io.display_message("\n\nSession interrupted. Goodbye!")
                 LOGGER.info("Session interrupted by user.")
                 break
 
@@ -109,41 +110,54 @@ class EngineCoordinator:
             # menu, so Ctrl+C / closed input must be handled for the whole action.
             try:
                 if action == "exit":
-                    self._io._print("\nThank you for using the Cyber Threat Detection Engine. Stay safe!")
+                    self._io.display_message("\nThank you for using the Cyber Threat Detection Engine. Stay safe!")
                     LOGGER.info("User selected exit.")
                     break
 
-                elif action == "analyze_submission":
-                    input_type = request.get("input_type", "text")
-                    if input_type == "text":
-                        self._handle_text_pipeline(request)
-                    else:
-                        # url or file → VirusTotal pipeline
-                        self._handle_resource_pipeline(request)
-
-                elif action == "batch_email_analysis":
-                    self._handle_batch_menu_request(request)
-
-                elif action == "previous_email_batches":
-                    self._handle_previous_batch_request()
-
-                elif action == "emerging_threat_radar":
-                    self._handle_threat_radar(request)
-
-                elif action == "view_trending_threats":
-                    # IOManager already displayed the trending threats; loop continues
-                    pass
-
-                elif action == "history_query":
-                    # IOManager already handled the history query interactively; loop continues
-                    pass
-
-                else:
+                handler = handlers.get(action)
+                if handler is None:
                     LOGGER.warning("Unknown action received from IOManager: %s", action)
+                else:
+                    handler(request)
             except (KeyboardInterrupt, EOFError):
-                self._io._print("\n\nSession interrupted. Goodbye!")
+                self._io.display_message("\n\nSession interrupted. Goodbye!")
                 LOGGER.info("Session interrupted by user during action: %s", action)
                 break
+
+    # -------------------------------------------------------------------------
+    # Action dispatch table
+    # -------------------------------------------------------------------------
+
+    def _build_action_handlers(self) -> Dict[str, Callable[[dict], None]]:
+        """Map each menu action from IOManager to the method that handles it.
+
+        To add a feature: write a _handle_* method and add one entry here
+        (or extend this mapping in a subclass). "exit" is handled by run()
+        because it ends the loop.
+        """
+        return {
+            "analyze_submission": self._handle_analyze_submission,
+            "batch_email_analysis": self._handle_batch_menu_request,
+            "previous_email_batches": (
+                lambda _request: self._handle_previous_batch_request()
+            ),
+            "emerging_threat_radar": self._handle_threat_radar,
+            # IOManager already showed these screens interactively.
+            "view_trending_threats": self._handle_already_displayed,
+            "history_query": self._handle_already_displayed,
+        }
+
+    def _handle_analyze_submission(self, request: dict) -> None:
+        """Route text to the AI text pipeline and URLs/files to VirusTotal."""
+        if request.get("input_type", "text") == "text":
+            self._handle_text_pipeline(request)
+        else:
+            self._handle_resource_pipeline(request)
+
+    @staticmethod
+    def _handle_already_displayed(request: dict) -> None:
+        """No further work: IOManager completed this action on screen."""
+        LOGGER.debug("Action handled by IOManager: %s", request.get("action"))
 
     # -------------------------------------------------------------------------
     # Pipeline: Text / Scam Message Analysis
@@ -169,7 +183,7 @@ class EngineCoordinator:
         if result["success"]:
             self._io.display_assessment(submission)
         else:
-            self._io._print(
+            self._io.display_message(
                 f"\n[Analysis] {result['error']}"
             )
 
@@ -178,10 +192,15 @@ class EngineCoordinator:
         submission: Submission,
         *,
         email=None,
+        ai_result: Optional[dict] = None,
+        ai_error: Optional[str] = None,
     ) -> dict:
         """Process one text submission without terminal output.
 
-        Batch and ordinary text analysis share this implementation.
+        Single messages, sequential batches and threaded batches all share
+        this implementation. A threaded batch has already asked the AI in a
+        worker thread, so it passes that worker's ``ai_result`` (or its
+        ``ai_error``) and the AI is not called again here.
         Database failures are returned separately from analysis failures.
         """
         submission_id = None
@@ -202,23 +221,12 @@ class EngineCoordinator:
             submission.mark_processing()
             self._data.save_submission(submission)
 
-            ai_arguments = {
-                "text": submission.input_value,
-                "interaction": submission.interaction_type,
-                "interaction_description": (
-                    submission.interaction_description
-                ),
-            }
+            if ai_error is not None:
+                # A worker thread already failed to analyse this email.
+                raise ValueError(ai_error)
 
-            if email is not None:
-                # Keep the existing Submission interaction vocabulary.
-                # Explicitly report unknown exposure to the AI.
-                ai_arguments["interaction"] = "unknown"
-                ai_arguments["include_scenarios"] = True
-
-            # Every text record reaching analysis uses AIManager before
-            # business-rule evaluation; API failure cannot count as success.
-            ai_result = self._ai.analyze_message(**ai_arguments)
+            if ai_result is None:
+                ai_result = self._request_text_analysis(submission, email)
 
             if not isinstance(ai_result, dict):
                 raise ValueError(
@@ -237,44 +245,7 @@ class EngineCoordinator:
                 self._get_model_name(),
             )
 
-            indicators = ai_result.get("indicators", {})
-
-            if not isinstance(indicators, dict):
-                raise ValueError("AI indicators must be an object.")
-
-            for indicator_name, indicator_data in indicators.items():
-                if not isinstance(indicator_data, dict):
-                    continue
-
-                if indicator_data.get("present") is not True:
-                    continue
-
-                evidence_text = str(
-                    indicator_data.get("evidence", "")
-                ).strip()
-
-                severity = "medium"
-
-                if indicator_name in {
-                    "payment_request",
-                    "credential_request",
-                    "otp_request",
-                    "download_request",
-                }:
-                    severity = "high"
-
-                submission.create_evidence(
-                    name=indicator_name,
-                    source="gemini",
-                    evidence_type="indicator",
-                    evidence_value=evidence_text or None,
-                    excerpt=(
-                        evidence_text[:200]
-                        if evidence_text
-                        else None
-                    ),
-                    severity=severity,
-                )
+            self._record_indicator_evidence(submission, ai_result)
 
             # LogicManager applies domain rules to the AI-enriched record.
             # The coordinator does not calculate the final risk category.
@@ -346,6 +317,60 @@ class EngineCoordinator:
                 "database_error": database_error,
             }
 
+    def _request_text_analysis(self, submission: Submission, email=None) -> dict:
+        """Ask the AI to analyse a text submission that has no result yet."""
+        ai_arguments = {
+            "text": submission.input_value,
+            "interaction": submission.interaction_type,
+            "interaction_description": submission.interaction_description,
+        }
+
+        if email is not None:
+            # Imported emails: the recipient's actions are unknown.
+            ai_arguments["interaction"] = "unknown"
+            ai_arguments["include_scenarios"] = True
+
+        # Every text record reaching analysis uses AIManager before
+        # business-rule evaluation; API failure cannot count as success.
+        return self._ai.analyze_message(**ai_arguments)
+
+    # Indicators that request money, credentials, codes or downloads.
+    _HIGH_SEVERITY_INDICATORS = frozenset({
+        "payment_request",
+        "credential_request",
+        "otp_request",
+        "download_request",
+    })
+
+    @classmethod
+    def _record_indicator_evidence(cls, submission: Submission, ai_result: dict) -> None:
+        """Add a ThreatEvidence to the submission for each indicator the AI found."""
+        indicators = ai_result.get("indicators", {})
+
+        if not isinstance(indicators, dict):
+            raise ValueError("AI indicators must be an object.")
+
+        for indicator_name, indicator_data in indicators.items():
+            if not isinstance(indicator_data, dict):
+                continue
+
+            if indicator_data.get("present") is not True:
+                continue
+
+            evidence_text = str(indicator_data.get("evidence", "")).strip()
+            severity = (
+                "high" if indicator_name in cls._HIGH_SEVERITY_INDICATORS else "medium"
+            )
+
+            submission.create_evidence(
+                name=indicator_name,
+                source="gemini",
+                evidence_type="indicator",
+                evidence_value=evidence_text or None,
+                excerpt=evidence_text[:200] if evidence_text else None,
+                severity=severity,
+            )
+
     def _review_email_batch(self, batch: dict) -> None:
         """Use the same saved review screen for new and previous batches."""
         reference = batch["batch_reference"]
@@ -405,7 +430,7 @@ class EngineCoordinator:
                     )
 
                     if batch_info is None:
-                        self._io._print("Batch not found.")
+                        self._io.display_message("Batch not found.")
                         continue
 
                     batch_id = batch_info["batch_id"]
@@ -424,7 +449,7 @@ class EngineCoordinator:
                     writer = WordReportWriter()
                     saved_path = writer.export(report, str(output_file))
 
-                    self._io._print(
+                    self._io.display_message(
                         f"Word report saved successfully: {saved_path}"
                     )
                     continue
@@ -443,7 +468,7 @@ class EngineCoordinator:
                     )
 
                     if details is None:
-                        self._io._print(
+                        self._io.display_message(
                             "The selected email is unavailable."
                         )
                         continue
@@ -459,22 +484,22 @@ class EngineCoordinator:
                 )
 
                 LOGGER.exception("Could not %s.", action)
-                self._io._print(f"Could not {action}: {error}")
+                self._io.display_message(f"Could not {action}: {error}")
 
     def _handle_batch_menu_request(self, request: dict) -> None:
         """Process a batch and display its saved summary."""
         try:
-            self._io._print(
+            self._io.display_message(
                 "Importing and analysing emails. Please wait..."
             )
 
             result = self._handle_batch_pipeline(request)
 
             if not result["status_saved"]:
-                self._io._print(
+                self._io.display_message(
                     "The final batch status could not be saved."
                 )
-                self._io._print(
+                self._io.display_message(
                     f"Reason: {result['status_error']}"
                 )
 
@@ -485,19 +510,19 @@ class EngineCoordinator:
                     self._review_email_batch(batch)
                     break
             else:
-                self._io._print(
+                self._io.display_message(
                     "The saved batch summary could not be retrieved."
                 )
 
             if result["unprocessed_count"]:
-                self._io._print(
+                self._io.display_message(
                     f"Emails not processed: "
                     f"{result['unprocessed_count']}"
                 )
 
         except (DataManagerError, ValueError, RuntimeError) as error:
             LOGGER.exception("Batch processing failed.")
-            self._io._print(f"Batch processing failed: {error}")
+            self._io.display_message(f"Batch processing failed: {error}")
 
     def _handle_previous_batch_request(self) -> None:
         """Load previous batches and display the selected summary."""
@@ -513,11 +538,11 @@ class EngineCoordinator:
                     self._review_email_batch(batch)
                     return
 
-            self._io._print("The selected batch is unavailable.")
+            self._io.display_message("The selected batch is unavailable.")
 
         except (DataManagerError, ValueError) as error:
             LOGGER.exception("Loading previous batches failed.")
-            self._io._print(
+            self._io.display_message(
                 f"Could not load previous batches: {error}"
             )
 
@@ -527,11 +552,43 @@ class EngineCoordinator:
 
     # Batch processing delegates accepted emails to the shared text processor,
     # keeping AI analysis and persistence orchestration in one implementation.
-    def _handle_batch_pipeline(self, request: dict) -> dict:
-        """Import and process a batch sequentially using shared analysis.
+    @staticmethod
+    def _email_analysis_content(email) -> str:
+        """Return the JSON text the AI analyses for one imported email."""
+        return json.dumps({
+            "subject": email.subject,
+            "sender": email.sender,
+            "reply_to": email.reply_to,
+            "recipients": email.recipients,
+            "body_text": email.body_text,
+            "extracted_urls": email.urls,
+            "attachment_metadata": email.attachments,
+            "parsing_warnings": email.warnings,
+        }, ensure_ascii=False)
 
+    def _build_email_submission(self, email, batch_reference: str) -> Submission:
+        """Create the Submission that records one imported email."""
+        return Submission(
+            input_type="text",
+            input_value=self._email_analysis_content(email),
+            interaction_type="other",
+            interaction_description=(
+                "This email was imported for batch analysis. "
+                "Recipient actions are unknown and have not "
+                "been reported."
+            ),
+            file_path=email.source_path,
+            data_origin="batch_email",
+            dataset_batch=batch_reference,
+        )
+
+    def _handle_batch_pipeline(self, request: dict) -> dict:
+        """Import a batch of emails and analyse each one.
+
+        With a BatchProcessor the AI calls run concurrently in worker threads;
+        without one they run one by one. Either way every email is saved and
+        assessed through the same _process_text_submission pipeline.
         Returns data for IOManager to display.
-        Threading and report generation are separate integrations.
         """
         if self._ingestion is None:
             raise RuntimeError(
@@ -575,169 +632,48 @@ class EngineCoordinator:
             "processing",
         )
 
+        # Threaded mode: worker threads ask the AI for every email first.
+        # Database writes and screen output then stay on this main thread.
+        worker_items = {}
         if self._batch_processor is not None:
-            batch_items = []
-            for email in accepted:
-                analysis_content = json.dumps({
-                    "subject": email.subject,
-                    "sender": email.sender,
-                    "reply_to": email.reply_to,
-                    "recipients": email.recipients,
-                    "body_text": email.body_text,
-                    "extracted_urls": email.urls,
-                    "attachment_metadata": email.attachments,
-                    "parsing_warnings": email.warnings,
-                }, ensure_ascii=False)
-                item = BatchItem(
+            batch_items = [
+                BatchItem(
                     item_id=email.item_id,
-                    email_content=analysis_content,
-                    batch_id=batch_reference
+                    email_content=self._email_analysis_content(email),
+                    batch_id=batch_reference,
                 )
-                batch_items.append(item)
+                for email in accepted
+            ]
+            worker_items = {
+                item.item_id: item
+                for item in self._batch_processor.process_batch(batch_items)
+            }
 
-            processed_items = self._batch_processor.process_batch(batch_items)
+        results = []
+        for email in accepted:
+            submission = self._build_email_submission(email, batch_reference)
+            analysis = {}
+            item = worker_items.get(email.item_id)
 
-            results = []
-            for item in processed_items:
-                matching_email = next((e for e in accepted if e.item_id == item.item_id), None)
-                result_dict = {
-                    "success": False,
-                    "database_error": False,
-                    "item_id": item.item_id
-                }
-                submission = None
-                try:
-                    if item.status == "completed" and item.ai_result is not None:
-                        submission = Submission(
-                            input_type="text",
-                            input_value=item.email_content,
-                            interaction_type="other",
-                            interaction_description=(
-                                "This email was imported for batch analysis. "
-                                "Recipient actions are unknown and have not been reported."
-                            ),
-                            file_path=matching_email.source_path if matching_email else None,
-                            data_origin="batch_email",
-                            dataset_batch=batch_reference,
-                        )
-                        
-                        submission_id = self._data.save_submission(submission)
-                        self._data.link_submission_to_batch(batch_reference, submission_id)
-                        
-                        if matching_email is not None:
-                            self._data.save_email_metadata(submission_id, matching_email)
-                            
-                        self._data.save_text_analysis(submission_id, item.ai_result, self._get_model_name())
-                        
-                        assessment = self._logic.evaluate_text_threat(submission, item.ai_result)
-                        self._attach_text_education(assessment, item.ai_result)
-                        submission.set_assessment(assessment)
-                        
-                        self._data.save_assessment(submission_id, assessment, self._get_model_name())
-                        
-                        indicators = item.ai_result.get("indicators", {})
-                        if isinstance(indicators, dict):
-                            for indicator_name, indicator_data in indicators.items():
-                                if isinstance(indicator_data, dict) and indicator_data.get("present") is True:
-                                    evidence_text = str(indicator_data.get("evidence", "")).strip()
-                                    severity = "high" if indicator_name in {
-                                        "payment_request", "credential_request", "otp_request", "download_request"
-                                    } else "medium"
-                                    submission.create_evidence(
-                                        name=indicator_name,
-                                        source="gemini",
-                                        evidence_type="indicator",
-                                        evidence_value=evidence_text or None,
-                                        excerpt=evidence_text[:200] if evidence_text else None,
-                                        severity=severity,
-                                    )
-                        if submission.evidences:
-                            self._data.save_evidences(submission_id, submission.evidences)
-                            
-                        submission.mark_completed()
-                        self._data.save_submission(submission)
-                        result_dict["success"] = True
-                    else:
-                        # Handle items that failed background processing
-                        submission = Submission(
-                            input_type="text",
-                            input_value=item.email_content,
-                            interaction_type="other",
-                            interaction_description=(
-                                "This email failed batch processing analysis."
-                            ),
-                            file_path=matching_email.source_path if matching_email else None,
-                            data_origin="batch_email",
-                            dataset_batch=batch_reference,
-                        )
-                        submission_id = self._data.save_submission(submission)
-                        self._data.link_submission_to_batch(batch_reference, submission_id)
-                        if matching_email is not None:
-                            self._data.save_email_metadata(submission_id, matching_email)
-                        
-                        error_msg = item.error_message or "Unknown processing error"
-                        submission.mark_failed(error_msg)
-                        self._data.save_submission(submission)
-                except DataManagerError:
-                    LOGGER.exception("Database persistence failed for item %s", item.item_id)
-                    result_dict["database_error"] = True
-                except (ValueError, TypeError) as error:
-                    # The AI result could not be assessed (e.g. a warning sign was
-                    # flagged without evidence). Fail only this email and continue
-                    # with the rest of the batch instead of stopping it.
-                    LOGGER.exception("Assessment failed for item %s", item.item_id)
-                    result_dict["error"] = str(error)
-                    if submission is not None and submission.submission_id is not None:
-                        try:
-                            submission.mark_failed(str(error))
-                            self._data.save_submission(submission)
-                        except DataManagerError:
-                            LOGGER.exception("Could not save failure for item %s", item.item_id)
-                            result_dict["database_error"] = True
-                
-                results.append(result_dict)
-                if result_dict["database_error"]:
-                    break
+            if item is not None:
+                if item.status == "completed" and item.ai_result is not None:
+                    analysis["ai_result"] = item.ai_result
+                else:
+                    analysis["ai_error"] = (
+                        item.error_message or "Unknown processing error"
+                    )
 
+            # One shared pipeline for sequential and threaded batches.
+            result = self._process_text_submission(
+                submission,
+                email=email,
+                **analysis,
+            )
+            result["item_id"] = email.item_id
+            results.append(result)
 
-        else:
-            results = []
-            for email in accepted:
-                analysis_content = json.dumps({
-                    "subject": email.subject,
-                    "sender": email.sender,
-                    "reply_to": email.reply_to,
-                    "recipients": email.recipients,
-                    "body_text": email.body_text,
-                    "extracted_urls": email.urls,
-                    "attachment_metadata": email.attachments,
-                    "parsing_warnings": email.warnings,
-                }, ensure_ascii=False)
-
-                submission = Submission(
-                    input_type="text",
-                    input_value=analysis_content,
-                    interaction_type="other",
-                    interaction_description=(
-                        "This email was imported for batch analysis. "
-                        "Recipient actions are unknown and have not "
-                        "been reported."
-                    ),
-                    file_path=email.source_path,
-                    data_origin="batch_email",
-                    dataset_batch=batch_reference,
-                )
-
-                result = self._process_text_submission(
-                    submission,
-                    email=email,
-                )
-
-                result["item_id"] = email.item_id
-                results.append(result)
-
-                if result["database_error"]:
-                    break
+            if result["database_error"]:
+                break
 
         successful_count = 0
         analysis_failed_count = 0
@@ -837,7 +773,7 @@ class EngineCoordinator:
             submission.submission_id = submission_id
         except DataManagerError as db_err:
             LOGGER.error("Failed to persist initial submission: %s", db_err)
-            self._io._print(f"\n[Database] Could not save submission: {db_err}")
+            self._io.display_message(f"\n[Database] Could not save submission: {db_err}")
             return
 
         # Step 2: Mark processing
@@ -850,7 +786,7 @@ class EngineCoordinator:
             LOGGER.error(error_msg)
             submission.mark_failed(error_msg)
             self._safe_update_submission(submission)
-            self._io._print(f"\n[Scanner] {error_msg}")
+            self._io.display_message(f"\n[Scanner] {error_msg}")
             return
 
         scan_target = file_path if (input_type == "file" and file_path) else input_value
@@ -870,7 +806,7 @@ class EngineCoordinator:
             LOGGER.error("Scanner failed for submission #%d: %s", submission_id, error_msg)
             submission.mark_failed(error_msg)
             self._safe_update_submission(submission)
-            self._io._print(f"\n[Scanner] Scan failed: {error_msg}")
+            self._io.display_message(f"\n[Scanner] Scan failed: {error_msg}")
             return
 
         parsed_result = vt_result.get("parsed_result", {})
@@ -901,7 +837,7 @@ class EngineCoordinator:
             LOGGER.error("AIManager failed for submission #%d: %s", submission_id, error_msg)
             submission.mark_failed(error_msg)
             self._safe_update_submission(submission)
-            self._io._print(f"\n[AI Analysis] Analysis failed: {error_msg}")
+            self._io.display_message(f"\n[AI Analysis] Analysis failed: {error_msg}")
             return
 
         # Step 7: Business rule evaluation using VT data AND the AI verdict
@@ -911,7 +847,7 @@ class EngineCoordinator:
             LOGGER.error("LogicManager failed for submission #%d: %s", submission_id, logic_err)
             submission.mark_failed(str(logic_err))
             self._safe_update_submission(submission)
-            self._io._print(f"\n[Risk Analysis] Risk evaluation failed: {logic_err}")
+            self._io.display_message(f"\n[Risk Analysis] Risk evaluation failed: {logic_err}")
             return
 
         # Step 8: Attach the AI's educational guidance from the same response
@@ -962,7 +898,7 @@ class EngineCoordinator:
             )
             self._safe_update_submission(submission)
 
-            self._io._print(
+            self._io.display_message(
                 "\n[Database] Results could not be saved completely. "
                 "This submission has not completed successfully."
             )
@@ -985,8 +921,7 @@ class EngineCoordinator:
         Steps:
         1. Extract topic from request dict (may be None for broad scan).
         2. Call AIManager.fetch_emerging_radar(topic).
-        3. Display result via IOManager.display_threat_radar() if available,
-           else fallback to a plain-text summary print.
+        3. Display the result via IOManager.display_threat_radar().
         """
         topic: Optional[str] = request.get("topic")
         LOGGER.info("Fetching emerging threat radar. Topic: %s", topic or "(all)")
@@ -999,29 +934,10 @@ class EngineCoordinator:
                 if isinstance(radar_result, dict)
                 else "Radar returned an invalid response."
             )
-            self._io._print(f"\n[Threat Radar] Could not fetch threat intelligence: {error_msg}")
+            self._io.display_message(f"\n[Threat Radar] Could not fetch threat intelligence: {error_msg}")
             return
 
-        if hasattr(self._io, "display_threat_radar"):
-            try:
-                self._io.display_threat_radar(radar_result, topic=topic)
-            except TypeError:
-                self._io.display_threat_radar(radar_result)
-        else:
-            # Graceful fallback if IOManager lacks the display method
-            content = radar_result.get("content", "No content available.")
-            sources = radar_result.get("sources", [])
-            self._io._print("\n" + "=" * 72)
-            self._io._print("🌐  EMERGING THREAT RADAR REPORT")
-            self._io._print("=" * 72)
-            self._io._print(content)
-            if sources:
-                self._io._print("\nSources:")
-                for src in sources:
-                    title = src.get("title", "Unnamed source")
-                    url = src.get("url", "")
-                    self._io._print(f"  • {title}: {url}")
-            self._io._print("=" * 72)
+        self._io.display_threat_radar(radar_result, topic=topic)
 
     # -------------------------------------------------------------------------
     # Private Helpers
