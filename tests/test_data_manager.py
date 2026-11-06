@@ -42,6 +42,72 @@ class DataManagerTests(unittest.TestCase):
         submission.mark_completed(self.assessment())
         return submission
 
+    def test_batch_submissions_returns_actual_email_ids(self):
+        """Batch queries should include saved email IDs without losing submissions."""
+
+        # Create a temporary batch.
+        with self.manager._get_connection() as connection:
+            connection.execute(
+                """
+                INSERT INTO email_batch (
+                    batch_reference, created_at, processing_status,
+                    total_files, accepted_count, duplicate_count,
+                    import_failed_count
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                ("BATCH-TEST", "2026-11-06", "imported", 2, 2, 0, 0),
+            )
+
+        first = Submission(
+            "text",
+            "First test email",
+            data_origin="batch",
+            dataset_batch="BATCH-TEST",
+        )
+        first_id = self.manager.save_submission(first)
+
+        second = Submission(
+            "text",
+            "Second test email",
+            data_origin="batch",
+            dataset_batch="BATCH-TEST",
+        )
+        second_id = self.manager.save_submission(second)
+
+        # Give only the first submission an email reference.
+        with self.manager._get_connection() as connection:
+            connection.execute(
+                """
+                INSERT INTO email_metadata (
+                    submission_id, item_id, source_path, file_hash,
+                    subject, sender, reply_to, recipients, urls,
+                    attachments, warnings
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    first_id, "EMAIL-001", "first.eml", "test-hash",
+                    "Test subject", "sender@example.com", "",
+                    "[]", "[]", "[]", "[]",
+                ),
+            )
+
+        # Retrieve the batch records using our updated query.
+        records = self.manager.get_batch_submissions("BATCH-TEST")
+
+        # Both submissions should still exist.
+        self.assertEqual(len(records), 2)
+
+        # The first submission should contain the actual Email ID.
+        self.assertEqual(records[0]["submission_id"], first_id)
+        self.assertEqual(records[0]["email_id"], "EMAIL-001")
+
+        # The second submission should remain, even without metadata.
+        self.assertEqual(records[1]["submission_id"], second_id)
+        self.assertIsNone(records[1]["email_id"])
+
+
     def test_initialize_is_repeatable_and_preserves_tables(self):
         self.manager.initialize_database()
         with self.manager._get_connection() as conn:

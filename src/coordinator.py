@@ -14,6 +14,8 @@ Demonstrates OOP Rubric Principles:
 import json
 import logging
 from typing import Optional
+import re
+from pathlib import Path
 
 from .managers.ai_manager import AIManager
 from .managers.data_manager import DataManager, DataManagerError
@@ -23,8 +25,9 @@ from .models.submission import Submission
 from .services.virustotal_scanner import VirusTotalScanner
 from .services.email_ingestion_service import EmailIngestionService
 from .batch.batch_item import BatchItem
-from .batch.batch_processor import BatchProcessor  
-
+from .batch.batch_processor import BatchProcessor
+from .batch.batch_report_service import BatchReportService
+from .batch.word_report_writer import WordReportWriter
 
 LOGGER = logging.getLogger(__name__)
 
@@ -388,8 +391,41 @@ class EngineCoordinator:
                     )
 
                 elif choice == "4":
+                    report_service = BatchReportService(self._data)
+                    report = report_service.build_report(reference)
+
+                    batches = self._data.list_email_batches()
+
+                    batch_info = next(
+                        (
+                            batch for batch in batches
+                            if batch["batch_reference"] == reference
+                        ),
+                        None
+                    )
+
+                    if batch_info is None:
+                        self._io._print("Batch not found.")
+                        continue
+
+                    batch_id = batch_info["batch_id"]
+
+                    report_dir = Path("reports")
+                    report_dir.mkdir(parents=True, exist_ok=True)
+
+                    output_file = report_dir / f"BATCH-{batch_id:04d}.docx"
+
+                    # Avoid overwriting an existing report.
+                    counter = 2
+                    while output_file.exists():
+                        output_file = report_dir / f"BATCH-{batch_id:04d}_{counter}.docx"
+                        counter += 1
+
+                    writer = WordReportWriter()
+                    saved_path = writer.export(report, str(output_file))
+
                     self._io._print(
-                        "Word report download is not connected yet."
+                        f"Word report saved successfully: {saved_path}"
                     )
                     continue
 
@@ -415,11 +451,15 @@ class EngineCoordinator:
                     self._io.review_batch_email(details)
                     self._io.display_batch_email_rows(matches)
 
-            except (DataManagerError, ValueError) as error:
-                LOGGER.exception("Could not load batch emails.")
-                self._io._print(
-                    f"Could not load batch emails: {error}"
+            except (DataManagerError, ValueError, OSError) as error:
+                action = (
+                    "export Word report"
+                    if choice == "4"
+                    else "load batch emails"
                 )
+
+                LOGGER.exception("Could not %s.", action)
+                self._io._print(f"Could not {action}: {error}")
 
     def _handle_batch_menu_request(self, request: dict) -> None:
         """Process a batch and display its saved summary."""

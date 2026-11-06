@@ -1096,7 +1096,10 @@ class TestConcurrentBatchCoordinator(unittest.TestCase):
 
     def _saved_statuses(self):
         import sqlite3
-        with sqlite3.connect(self.database_path) as connection:
+        from contextlib import closing
+        # closing() really closes the file; on Windows an open SQLite file
+        # cannot be deleted when the temporary test folder is cleaned up.
+        with closing(sqlite3.connect(self.database_path)) as connection:
             return sorted(
                 connection.execute(
                     "SELECT processing_status, COALESCE(error_message, '') FROM submission"
