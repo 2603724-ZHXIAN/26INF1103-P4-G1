@@ -75,13 +75,25 @@ class AIManager:
         "made_payment_or_shared_banking_details",
     )
 
+    # Returned by every analysis when no API key is configured, so users
+    # see the real cause instead of a provider/network error.
+    NO_PROVIDER_MESSAGE = (
+        "No AI provider is configured. Add GEMINI_API_KEY (and optionally "
+        "GROQ_API_KEY) to the .env file, then restart the application."
+    )
+
     def __init__(
         self,
         llm_client: Optional[BaseLLMClient] = None,
         fallback_client: Optional[BaseLLMClient] = None,
     ) -> None:
-        """Initialise primary and fallback clients."""
-        self._llm_client: BaseLLMClient
+        """Initialise primary and fallback clients.
+
+        When no client is injected and no API key is configured, the primary
+        client is None: analysis then fails fast with NO_PROVIDER_MESSAGE
+        instead of calling a provider with a placeholder key.
+        """
+        self._llm_client: Optional[BaseLLMClient]
         self._fallback_client: Optional[BaseLLMClient] = None
 
         # Aggregation: an injected client exists independently and may be
@@ -101,9 +113,14 @@ class AIManager:
     # -------------------------------------------------------------------------
 
     @property
-    def llm_client(self) -> BaseLLMClient:
-        """Return the primary LLM client."""
+    def llm_client(self) -> Optional[BaseLLMClient]:
+        """Return the primary LLM client, or None when none is configured."""
         return self._llm_client
+
+    @property
+    def is_configured(self) -> bool:
+        """Return True when at least one AI provider can be called."""
+        return self._llm_client is not None
 
     @llm_client.setter
     def llm_client(self, client: BaseLLMClient) -> None:
@@ -163,8 +180,8 @@ class AIManager:
 
         return gemini_key, gemini_model, groq_key, groq_model
 
-    def _create_default_primary_client(self) -> BaseLLMClient:
-        """Create the existing default primary provider."""
+    def _create_default_primary_client(self) -> Optional[BaseLLMClient]:
+        """Create the default primary provider, or None without credentials."""
         (
             gemini_key,
             gemini_model,
@@ -188,13 +205,10 @@ class AIManager:
                 model_name=groq_model or "openai/gpt-oss-120b",
             )
 
-        # Preserve existing construction behaviour without credentials.
-        # This placeholder is not a mock and cannot produce successful
-        # live analysis without valid credentials.
-        return GroqClient(
-            api_key="offline_fallback_key",
-            model_name="openai/gpt-oss-120b",
-        )
+        # No credentials: do not create a client with a placeholder key,
+        # because every request would fail with a confusing provider error.
+        LOGGER.warning("No AI provider configured (GEMINI_API_KEY and GROQ_API_KEY missing).")
+        return None
 
     def _create_default_fallback_client(
         self,
@@ -767,6 +781,9 @@ class AIManager:
         schema: Dict[str, Any],
     ) -> Dict[str, Any]:
         """Use existing failover with extra validation for batch guidance."""
+        if self._llm_client is None:
+            return {"error": self.NO_PROVIDER_MESSAGE}
+
         primary_provider = self._llm_client.provider_name
         primary_result = None
         primary_failed = False
@@ -1072,6 +1089,9 @@ class AIManager:
         topic: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Fetch threat radar using the existing provider workflow."""
+        if self._llm_client is None:
+            return {"error": self.NO_PROVIDER_MESSAGE}
+
         if hasattr(self._llm_client, "fetch_threat_radar"):
             try:
                 result = self._llm_client.fetch_threat_radar(topic)

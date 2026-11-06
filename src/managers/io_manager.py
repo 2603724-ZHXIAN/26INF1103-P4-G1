@@ -182,6 +182,20 @@ class IOManager:
         """Return formatted I/O Manager tag."""
         return f"{self._c('blue')}[I/O Manager]{self._c('reset')}"
 
+    def display_ai_configuration_warning(self) -> None:
+        """Warn at start-up that no AI provider key is configured.
+
+        The application still runs so stored history and batches can be
+        reviewed; only new AI analysis is unavailable.
+        """
+        yellow, bold, reset = self._c("yellow"), self._c("bold"), self._c("reset")
+        self._print()
+        self._print(f"{yellow}{bold}[Configuration] No AI provider is configured.{reset}")
+        self._print("Add GEMINI_API_KEY (and optionally GROQ_API_KEY) to your .env file, then restart.")
+        self._print("Text, URL, file and batch analysis are unavailable until then.")
+        self._print("History, trending and previous batch records still work.")
+        self._print()
+
     def display_database_startup_error(self, db_path: str) -> None:
         """Explain an unreadable database at start-up in plain language.
 

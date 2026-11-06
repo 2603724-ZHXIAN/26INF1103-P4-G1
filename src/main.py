@@ -89,6 +89,10 @@ def main() -> None:
         sys.exit(1)
 
     ai_manager = AIManager(llm_client=gemini_client, fallback_client=groq_client)
+    if not ai_manager.is_configured:
+        LOGGER.warning("Starting without an AI provider: no API key configured.")
+        io_manager.display_ai_configuration_warning()
+
     logic_manager = LogicManager()
 
     # --- Coordinator (Composition + Aggregation) ----------------------------
