@@ -174,6 +174,20 @@ class VirusTotalScanner:
         endpoint = f"{self._base_url}/files/{file_hash}"
         res = self._request_endpoint(endpoint)
 
+        if res.get("status_code") == 404:
+            # Only the hash is looked up, so 404 means VirusTotal has never
+            # received this file. Explain that instead of a raw HTTP code.
+            return {
+                "error": (
+                    f"VirusTotal has no record of this file (SHA-256 {file_hash[:12]}...). "
+                    "For privacy only the file's fingerprint is sent, and this file has "
+                    "never been submitted to VirusTotal, so no scan result is available."
+                ),
+                "error_type": "not_found",
+                "status_code": 404,
+                "file_hash": file_hash,
+            }
+
         if "error" in res:
             return res
 

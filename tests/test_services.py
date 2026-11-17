@@ -9,8 +9,11 @@ Verifies:
 - Offline execution without requiring live API keys or network
 """
 
+import os
+import tempfile
 import unittest
 from typing import Any, Dict
+from unittest import mock
 
 from src.interfaces import BaseLLMClient
 from src.services import GeminiClient, GroqClient, VirusTotalScanner
@@ -148,6 +151,34 @@ class TestVirusTotalScanner(unittest.TestCase):
         res = vt.scan_resource("invalid_type", "target")
         self.assertIn("error", res)
         self.assertEqual(res.get("error_type"), "validation_error")
+
+    def _scan_temp_file(self, status_code):
+        """Scan a real temporary file while VirusTotal replies with status_code."""
+        with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as handle:
+            handle.write("harmless test content")
+        self.addCleanup(os.remove, handle.name)
+        reply = mock.Mock(status_code=status_code, text="")
+        reply.json.return_value = {"error": {"code": "NotFoundError"}}
+        with mock.patch("requests.get", return_value=reply) as fake_get:
+            result = VirusTotalScanner(api_key="valid_key").scan_resource("file", handle.name)
+        return result, fake_get, VirusTotalScanner.calculate_sha256(handle.name)
+
+    def test_unknown_file_gets_a_clear_not_found_message(self):
+        result, fake_get, file_hash = self._scan_temp_file(404)
+
+        self.assertEqual(result["error_type"], "not_found")
+        self.assertIn("no record of this file", result["error"])
+        self.assertNotIn("HTTP 404", result["error"])
+        self.assertEqual(result["file_hash"], file_hash)
+        # Privacy: only the hash is looked up; the file itself is never sent.
+        fake_get.assert_called_once()
+        self.assertTrue(fake_get.call_args.args[0].endswith(f"/files/{file_hash}"))
+
+    def test_other_http_errors_are_unchanged(self):
+        result, _, _ = self._scan_temp_file(500)
+
+        self.assertEqual(result["error_type"], "http_error")
+        self.assertIn("HTTP 500", result["error"])
 
 
 if __name__ == "__main__":
