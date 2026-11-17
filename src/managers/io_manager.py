@@ -276,6 +276,8 @@ class IOManager:
             f"{cyan}{'=' * width}{reset}",
             f"{bold}{cyan}{('🛡️  ' + self.APP_TITLE).center(width)}{reset}",
             f"{cyan}{'=' * width}{reset}",
+            f"{dim}  Results combine VirusTotal, AI analysis and fixed safety rules.{reset}",
+            f"{dim}  AI can make mistakes. Always verify through official channels.{reset}",
             f"  {yellow}[1]{reset} 📧 Analyze Suspicious Text / Scam Email Message",
             f"  {yellow}[2]{reset} 🔗 Analyze Suspicious URL",
             f"  {yellow}[3]{reset} 📎 Analyze File (Path)",
